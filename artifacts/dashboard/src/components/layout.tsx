@@ -1,8 +1,11 @@
 import { Link, useLocation } from "wouter"
-import { LayoutDashboard, Settings, Activity } from "lucide-react"
+import { LayoutDashboard, Settings, Activity, LogOut } from "lucide-react"
 import { useEffect } from "react"
+import { useLogout, avatarUrl, type AuthUser } from "@/hooks/use-auth"
+import { toast } from "sonner"
 
-export function Layout({ children }: { children: React.ReactNode }) {
+export function Layout({ children, user }: { children: React.ReactNode; user: AuthUser }) {
+  const logout = useLogout()
   const [location] = useLocation()
 
   // Ensure dark mode is active on mount
@@ -56,6 +59,34 @@ export function Layout({ children }: { children: React.ReactNode }) {
               <span className="text-muted-foreground">LATENCY</span>
               <span className="text-primary">42ms</span>
             </div>
+          </div>
+          {/* User info + logout */}
+          <div className="mt-3 flex items-center gap-2">
+            <img
+              src={avatarUrl(user)}
+              alt={user.username}
+              className="w-7 h-7 rounded-full border border-border shrink-0"
+            />
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-mono text-foreground truncate">
+                {user.globalName ?? user.username}
+              </p>
+              <p className="text-[10px] font-mono text-muted-foreground truncate">
+                {user.guilds.length} admin guild{user.guilds.length !== 1 ? "s" : ""}
+              </p>
+            </div>
+            <button
+              onClick={() =>
+                logout.mutate(undefined, {
+                  onError: () => toast.error("Logout failed"),
+                })
+              }
+              disabled={logout.isPending}
+              className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors rounded"
+              title="Sign out"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+            </button>
           </div>
         </div>
       </aside>
