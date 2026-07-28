@@ -3,13 +3,25 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: Moonlit Bot Dashboard API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: stats
+    description: Aggregate statistics
+  - name: guilds
+    description: Guild management
+  - name: warnings
+    description: Warning management
+  - name: queue
+    description: Queue management
+  - name: banned-words
+    description: Banned word management
+  - name: custom-commands
+    description: Custom command management
 paths:
   /healthz:
     get:
@@ -24,6 +36,330 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /stats:
+    get:
+      operationId: getStats
+      tags: [stats]
+      summary: Overall bot statistics
+      description: Aggregate counts across all guilds
+      responses:
+        "200":
+          description: Stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BotStats"
+
+  /guilds:
+    get:
+      operationId: listGuilds
+      tags: [guilds]
+      summary: List all guilds with data
+      responses:
+        "200":
+          description: Guild list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/GuildSummary"
+
+  /guilds/{guildId}/settings:
+    get:
+      operationId: getGuildSettings
+      tags: [guilds]
+      summary: Get guild settings
+      parameters:
+        - name: guildId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GuildSettings"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    put:
+      operationId: updateGuildSettings
+      tags: [guilds]
+      summary: Update guild settings
+      parameters:
+        - name: guildId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GuildSettingsInput"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GuildSettings"
+
+  /guilds/{guildId}/warnings:
+    get:
+      operationId: listWarnings
+      tags: [warnings]
+      summary: List warnings for a guild
+      parameters:
+        - name: guildId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Warnings
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Warning"
+
+  /guilds/{guildId}/warnings/{warningId}:
+    delete:
+      operationId: deleteWarning
+      tags: [warnings]
+      summary: Delete a warning
+      parameters:
+        - name: guildId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: warningId
+          in: path
+          required: true
+          schema:
+            type: number
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /guilds/{guildId}/warnings/stats:
+    get:
+      operationId: getWarningStats
+      tags: [warnings]
+      summary: Warning counts per user in a guild
+      parameters:
+        - name: guildId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Warning stats
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/UserWarningStat"
+
+  /guilds/{guildId}/queue:
+    get:
+      operationId: getQueue
+      tags: [queue]
+      summary: Get guild queue
+      parameters:
+        - name: guildId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Queue
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/QueueEntry"
+    delete:
+      operationId: resetQueue
+      tags: [queue]
+      summary: Reset (clear) the queue
+      parameters:
+        - name: guildId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Cleared
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /guilds/{guildId}/banned-words:
+    get:
+      operationId: listBannedWords
+      tags: [banned-words]
+      summary: List banned words for a guild
+      parameters:
+        - name: guildId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Banned words
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/BannedWord"
+    post:
+      operationId: addBannedWord
+      tags: [banned-words]
+      summary: Add a banned word
+      parameters:
+        - name: guildId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BannedWordInput"
+      responses:
+        "201":
+          description: Added
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BannedWord"
+
+  /guilds/{guildId}/banned-words/{word}:
+    delete:
+      operationId: deleteBannedWord
+      tags: [banned-words]
+      summary: Remove a banned word
+      parameters:
+        - name: guildId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: word
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Removed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /guilds/{guildId}/custom-commands:
+    get:
+      operationId: listCustomCommands
+      tags: [custom-commands]
+      summary: List custom commands for a guild
+      parameters:
+        - name: guildId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Custom commands
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CustomCommand"
+    post:
+      operationId: addCustomCommand
+      tags: [custom-commands]
+      summary: Add a custom command
+      parameters:
+        - name: guildId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CustomCommandInput"
+      responses:
+        "201":
+          description: Added
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CustomCommand"
+
+  /guilds/{guildId}/custom-commands/{commandName}:
+    delete:
+      operationId: deleteCustomCommand
+      tags: [custom-commands]
+      summary: Delete a custom command
+      parameters:
+        - name: guildId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: commandName
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
 components:
   schemas:
     HealthStatus:
@@ -34,3 +370,201 @@ components:
       required:
         - status
 
+    BotStats:
+      type: object
+      properties:
+        totalGuilds:
+          type: number
+        totalWarnings:
+          type: number
+        totalBannedWords:
+          type: number
+        totalCustomCommands:
+          type: number
+        totalQueueEntries:
+          type: number
+      required:
+        - totalGuilds
+        - totalWarnings
+        - totalBannedWords
+        - totalCustomCommands
+        - totalQueueEntries
+
+    GuildSummary:
+      type: object
+      properties:
+        guildId:
+          type: string
+        warningCount:
+          type: number
+        queueCount:
+          type: number
+        bannedWordCount:
+          type: number
+        customCommandCount:
+          type: number
+        automodEnabled:
+          type: boolean
+      required:
+        - guildId
+        - warningCount
+        - queueCount
+        - bannedWordCount
+        - customCommandCount
+        - automodEnabled
+
+    GuildSettings:
+      type: object
+      properties:
+        guildId:
+          type: string
+        logChannel:
+          type: ["string", "null"]
+        welcomeChannel:
+          type: ["string", "null"]
+        welcomeMessage:
+          type: ["string", "null"]
+        leaveMessage:
+          type: ["string", "null"]
+        prefix:
+          type: string
+        automodEnabled:
+          type: boolean
+        antiInvite:
+          type: boolean
+        antiMentionSpam:
+          type: boolean
+        mentionLimit:
+          type: number
+      required:
+        - guildId
+        - prefix
+        - automodEnabled
+        - antiInvite
+        - antiMentionSpam
+        - mentionLimit
+
+    GuildSettingsInput:
+      type: object
+      properties:
+        logChannel:
+          type: ["string", "null"]
+        welcomeChannel:
+          type: ["string", "null"]
+        welcomeMessage:
+          type: ["string", "null"]
+        leaveMessage:
+          type: ["string", "null"]
+        prefix:
+          type: string
+        automodEnabled:
+          type: boolean
+        antiInvite:
+          type: boolean
+        antiMentionSpam:
+          type: boolean
+        mentionLimit:
+          type: number
+
+    Warning:
+      type: object
+      properties:
+        id:
+          type: number
+        guildId:
+          type: string
+        userId:
+          type: string
+        reason:
+          type: ["string", "null"]
+        moderatorId:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+      required:
+        - id
+        - guildId
+        - userId
+        - createdAt
+
+    UserWarningStat:
+      type: object
+      properties:
+        userId:
+          type: string
+        count:
+          type: number
+      required:
+        - userId
+        - count
+
+    QueueEntry:
+      type: object
+      properties:
+        userId:
+          type: string
+        position:
+          type: number
+        joinedAt:
+          type: string
+      required:
+        - userId
+        - position
+        - joinedAt
+
+    BannedWord:
+      type: object
+      properties:
+        word:
+          type: string
+      required:
+        - word
+
+    BannedWordInput:
+      type: object
+      properties:
+        word:
+          type: string
+          minLength: 1
+      required:
+        - word
+
+    CustomCommand:
+      type: object
+      properties:
+        name:
+          type: string
+        response:
+          type: string
+      required:
+        - name
+        - response
+
+    CustomCommandInput:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+        response:
+          type: string
+          minLength: 1
+      required:
+        - name
+        - response
+
+    SuccessResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+      required:
+        - success
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error

@@ -6,6 +6,9 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export interface HealthStatus {
-  status: string;
+export interface CustomCommandInput {
+  /** @minLength 1 */
+  name: string;
+  /** @minLength 1 */
+  response: string;
 }

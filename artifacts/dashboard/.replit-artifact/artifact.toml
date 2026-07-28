@@ -1,0 +1,27 @@
+kind = "web"
+previewPath = "/"
+title = "Moonlit Dashboard"
+version = "1.0.0"
+id = "artifacts/dashboard"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 23183
+
+[services.development]
+run = "pnpm --filter @workspace/dashboard run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/dashboard", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/dashboard/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "23183"
+BASE_PATH = "/"
