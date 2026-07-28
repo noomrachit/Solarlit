@@ -713,10 +713,21 @@ async def settings_logchannel(interaction: discord.Interaction, channel: discord
 
 tree.add_command(settings_group)
 
+# Ping
+@tree.command(name="ping", description="ตรวจสอบสถานะและความหน่วงของบอท")
+async def ping_cmd(interaction: discord.Interaction):
+    latency_ms = round(bot.latency * 1000)
+    embed = discord.Embed(title="🏓 Pong!", color=0x5865F2)
+    embed.add_field(name="ความหน่วง (Latency)", value=f"`{latency_ms} ms`", inline=True)
+    embed.add_field(name="สถานะ", value="`ออนไลน์ ✅`", inline=True)
+    embed.set_footer(text="SoLARLIT Bot")
+    await interaction.response.send_message(embed=embed)
+
 # Help
 @tree.command(name="help", description="ดูคำสั่งทั้งหมด")
 async def help_cmd(interaction: discord.Interaction):
-    embed = discord.Embed(title="Moonlit Bot Commands", color=0x5865F2)
+    embed = discord.Embed(title="SoLARLIT Bot — คำสั่งทั้งหมด", color=0x5865F2)
+    embed.add_field(name="/ping", value="ตรวจสอบสถานะและความหน่วงของบอท", inline=False)
     embed.add_field(name="/mod", value="kick • ban • timeout • warn • warnings • clear", inline=False)
     embed.add_field(name="/welcome", value="channel • message • leave", inline=False)
     embed.add_field(name="/automod", value="toggle • anti_invite • anti_mention_spam • addword • removeword • listwords", inline=False)
