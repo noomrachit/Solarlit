@@ -29,7 +29,7 @@ export default function Login() {
             <Activity className="w-8 h-8 text-primary" />
           </div>
           <h1 className="text-3xl font-bold tracking-tight uppercase">
-            Moonlit<span className="text-primary">Bot</span>
+            SoLAR<span className="text-primary">LIT</span>
           </h1>
           <p className="text-xs font-mono text-muted-foreground uppercase tracking-widest mt-1">
             Mission Control

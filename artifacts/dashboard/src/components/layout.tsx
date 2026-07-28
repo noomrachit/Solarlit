@@ -21,7 +21,7 @@ export function Layout({ children, user }: { children: React.ReactNode; user: Au
             <Activity className="w-5 h-5" />
           </div>
           <div>
-            <h1 className="font-bold text-lg leading-tight tracking-tight uppercase">Moonlit<span className="text-primary">Bot</span></h1>
+            <h1 className="font-bold text-lg leading-tight tracking-tight uppercase">SoLAR<span className="text-primary">LIT</span></h1>
             <p className="text-[10px] text-muted-foreground font-mono uppercase tracking-widest">Mission Control</p>
           </div>
         </div>
