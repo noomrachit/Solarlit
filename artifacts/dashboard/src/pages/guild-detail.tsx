@@ -48,9 +48,9 @@ export default function GuildDetail() {
           <Server className="w-6 h-6" />
         </div>
         <div>
-          <h1 className="text-2xl font-bold tracking-tight uppercase">Guild Deployment</h1>
+          <h1 className="text-2xl font-bold tracking-tight uppercase">ข้อมูลเซิร์ฟเวอร์</h1>
           <p className="text-muted-foreground font-mono text-sm flex items-center gap-2">
-            ID: <span className="text-foreground">{guildId}</span>
+            รหัส: <span className="text-foreground">{guildId}</span>
           </p>
         </div>
       </div>
@@ -58,19 +58,19 @@ export default function GuildDetail() {
       <Tabs defaultValue="settings" className="w-full">
         <TabsList className="bg-transparent border-b border-border w-full justify-start h-auto p-0 rounded-none overflow-x-auto flex-nowrap">
           <TabsTrigger value="settings" className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-6 py-3 font-mono uppercase tracking-wider text-xs">
-            <SettingsIcon className="w-3.5 h-3.5 mr-2" /> Settings
+            <SettingsIcon className="w-3.5 h-3.5 mr-2" /> การตั้งค่า
           </TabsTrigger>
           <TabsTrigger value="warnings" className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-6 py-3 font-mono uppercase tracking-wider text-xs">
-            <AlertTriangle className="w-3.5 h-3.5 mr-2" /> Warnings
+            <AlertTriangle className="w-3.5 h-3.5 mr-2" /> คำเตือน
           </TabsTrigger>
           <TabsTrigger value="queue" className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-6 py-3 font-mono uppercase tracking-wider text-xs">
-            <ListMusic className="w-3.5 h-3.5 mr-2" /> Queue
+            <ListMusic className="w-3.5 h-3.5 mr-2" /> คิว
           </TabsTrigger>
           <TabsTrigger value="banned_words" className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-6 py-3 font-mono uppercase tracking-wider text-xs">
-            <ShieldBan className="w-3.5 h-3.5 mr-2" /> Automod Words
+            <ShieldBan className="w-3.5 h-3.5 mr-2" /> คำต้องห้าม
           </TabsTrigger>
           <TabsTrigger value="commands" className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-6 py-3 font-mono uppercase tracking-wider text-xs">
-            <Terminal className="w-3.5 h-3.5 mr-2" /> Commands
+            <Terminal className="w-3.5 h-3.5 mr-2" /> คำสั่ง
           </TabsTrigger>
         </TabsList>
 
@@ -97,17 +97,17 @@ function SettingsTab({ guildId }: { guildId: string }) {
     if (settings) setLocalSettings(settings)
   }, [settings])
 
-  if (isLoading || !localSettings) return <div className="text-muted-foreground font-mono animate-pulse">Fetching configuration...</div>
+  if (isLoading || !localSettings) return <div className="text-muted-foreground font-mono animate-pulse">กำลังโหลดการตั้งค่า...</div>
 
   const handleSave = () => {
     updateSettings.mutate(
       { guildId, data: localSettings },
       {
         onSuccess: () => {
-          toast.success("Configuration synchronized.")
+          toast.success("บันทึกการตั้งค่าเรียบร้อย")
           queryClient.invalidateQueries({ queryKey: getGetGuildSettingsQueryKey(guildId) })
         },
-        onError: () => toast.error("Failed to synchronize configuration.")
+        onError: () => toast.error("บันทึกการตั้งค่าไม่สำเร็จ")
       }
     )
   }
@@ -117,11 +117,11 @@ function SettingsTab({ guildId }: { guildId: string }) {
       <div className="space-y-6">
         <Card className="bg-card/30 border-border/50">
           <CardHeader>
-            <CardTitle className="uppercase tracking-wider text-sm font-mono text-primary">Core Settings</CardTitle>
+            <CardTitle className="uppercase tracking-wider text-sm font-mono text-primary">การตั้งค่าหลัก</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-1.5">
-              <label className="text-xs font-mono text-muted-foreground uppercase">Command Prefix</label>
+              <label className="text-xs font-mono text-muted-foreground uppercase">Prefix คำสั่ง</label>
               <Input 
                 value={localSettings.prefix || ""} 
                 onChange={(e) => setLocalSettings({ ...localSettings, prefix: e.target.value })} 
@@ -129,7 +129,7 @@ function SettingsTab({ guildId }: { guildId: string }) {
               />
             </div>
             <div className="space-y-1.5">
-              <label className="text-xs font-mono text-muted-foreground uppercase">Log Channel ID</label>
+              <label className="text-xs font-mono text-muted-foreground uppercase">รหัสช่องบันทึก (Log Channel ID)</label>
               <Input 
                 value={localSettings.logChannel || ""} 
                 onChange={(e) => setLocalSettings({ ...localSettings, logChannel: e.target.value })} 
@@ -142,11 +142,11 @@ function SettingsTab({ guildId }: { guildId: string }) {
 
         <Card className="bg-card/30 border-border/50">
           <CardHeader>
-            <CardTitle className="uppercase tracking-wider text-sm font-mono text-primary">Welcome/Leave System</CardTitle>
+            <CardTitle className="uppercase tracking-wider text-sm font-mono text-primary">ระบบต้อนรับ / ลาออก</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-1.5">
-              <label className="text-xs font-mono text-muted-foreground uppercase">System Channel ID</label>
+              <label className="text-xs font-mono text-muted-foreground uppercase">รหัสช่องระบบ (Channel ID)</label>
               <Input 
                 value={localSettings.welcomeChannel || ""} 
                 onChange={(e) => setLocalSettings({ ...localSettings, welcomeChannel: e.target.value })} 
@@ -155,21 +155,21 @@ function SettingsTab({ guildId }: { guildId: string }) {
               />
             </div>
             <div className="space-y-1.5">
-              <label className="text-xs font-mono text-muted-foreground uppercase">Welcome Message</label>
+              <label className="text-xs font-mono text-muted-foreground uppercase">ข้อความต้อนรับ</label>
               <Input 
                 value={localSettings.welcomeMessage || ""} 
                 onChange={(e) => setLocalSettings({ ...localSettings, welcomeMessage: e.target.value })} 
                 className="font-mono"
-                placeholder="Welcome to the server, {user}!"
+                placeholder="ยินดีต้อนรับ {user} สู่เซิร์ฟเวอร์!"
               />
             </div>
             <div className="space-y-1.5">
-              <label className="text-xs font-mono text-muted-foreground uppercase">Leave Message</label>
+              <label className="text-xs font-mono text-muted-foreground uppercase">ข้อความเมื่อออก</label>
               <Input 
                 value={localSettings.leaveMessage || ""} 
                 onChange={(e) => setLocalSettings({ ...localSettings, leaveMessage: e.target.value })} 
                 className="font-mono"
-                placeholder="{user} has left the server."
+                placeholder="{user} ออกจากเซิร์ฟเวอร์แล้ว"
               />
             </div>
           </CardContent>
@@ -179,13 +179,13 @@ function SettingsTab({ guildId }: { guildId: string }) {
       <div className="space-y-6">
         <Card className="bg-card/30 border-border/50">
           <CardHeader>
-            <CardTitle className="uppercase tracking-wider text-sm font-mono text-primary">Automod Engine</CardTitle>
+            <CardTitle className="uppercase tracking-wider text-sm font-mono text-primary">ระบบออโต้มอด</CardTitle>
           </CardHeader>
           <CardContent className="space-y-6">
             <div className="flex items-center justify-between">
               <div>
-                <div className="font-mono text-sm uppercase">Master Switch</div>
-                <div className="text-xs text-muted-foreground">Enable or disable all automod features</div>
+                <div className="font-mono text-sm uppercase">เปิด/ปิดทั้งหมด</div>
+                <div className="text-xs text-muted-foreground">เปิดหรือปิดฟีเจอร์ออโต้มอดทั้งหมด</div>
               </div>
               <Switch 
                 checked={localSettings.automodEnabled} 
@@ -195,21 +195,21 @@ function SettingsTab({ guildId }: { guildId: string }) {
             
             <div className={`space-y-4 pt-4 border-t border-border/50 ${!localSettings.automodEnabled ? 'opacity-50 pointer-events-none' : ''}`}>
               <div className="flex items-center justify-between">
-                <div className="font-mono text-sm">Anti-Invite</div>
+                <div className="font-mono text-sm">บล็อกลิงก์เชิญ</div>
                 <Switch 
                   checked={localSettings.antiInvite} 
                   onCheckedChange={(c) => setLocalSettings({ ...localSettings, antiInvite: c })} 
                 />
               </div>
               <div className="flex items-center justify-between">
-                <div className="font-mono text-sm">Anti-Mention Spam</div>
+                <div className="font-mono text-sm">บล็อกการแท็กสแปม</div>
                 <Switch 
                   checked={localSettings.antiMentionSpam} 
                   onCheckedChange={(c) => setLocalSettings({ ...localSettings, antiMentionSpam: c })} 
                 />
               </div>
               <div className="space-y-1.5 pt-2">
-                <label className="text-xs font-mono text-muted-foreground uppercase">Mention Limit (per message)</label>
+                <label className="text-xs font-mono text-muted-foreground uppercase">จำนวนการแท็กสูงสุด (ต่อข้อความ)</label>
                 <Input 
                   type="number"
                   value={localSettings.mentionLimit || 0} 
@@ -226,7 +226,7 @@ function SettingsTab({ guildId }: { guildId: string }) {
           disabled={updateSettings.isPending}
           className="w-full font-mono uppercase tracking-widest h-12"
         >
-          {updateSettings.isPending ? "Synchronizing..." : "Apply Configuration"}
+          {updateSettings.isPending ? "กำลังบันทึก..." : "บันทึกการตั้งค่า"}
         </Button>
       </div>
     </div>
@@ -242,42 +242,42 @@ function WarningsTab({ guildId }: { guildId: string }) {
   const handleDelete = (warningId: number) => {
     deleteWarning.mutate({ guildId, warningId }, {
       onSuccess: () => {
-        toast.success("Warning expunged from records.")
+        toast.success("ลบคำเตือนเรียบร้อย")
         queryClient.invalidateQueries({ queryKey: getListWarningsQueryKey(guildId) })
         queryClient.invalidateQueries({ queryKey: getGetWarningStatsQueryKey(guildId) })
       },
-      onError: () => toast.error("Failed to delete warning.")
+      onError: () => toast.error("ลบคำเตือนไม่สำเร็จ")
     })
   }
 
   return (
     <div className="grid md:grid-cols-3 gap-8">
       <div className="md:col-span-2 space-y-4">
-        <h2 className="text-sm font-mono uppercase tracking-wider text-primary">Warning Ledger</h2>
+        <h2 className="text-sm font-mono uppercase tracking-wider text-primary">รายการคำเตือน</h2>
         <Card className="border-border/50 bg-card/30">
           <div className="overflow-x-auto">
             <table className="w-full data-table">
               <thead>
                 <tr>
-                  <th>ID</th>
-                  <th>User ID</th>
-                  <th>Reason</th>
-                  <th>Date</th>
-                  <th>Action</th>
+                  <th>รหัส</th>
+                  <th>รหัสผู้ใช้</th>
+                  <th>เหตุผล</th>
+                  <th>วันที่</th>
+                  <th>จัดการ</th>
                 </tr>
               </thead>
               <tbody>
                 {isLoading ? (
-                  <tr><td colSpan={5} className="text-center py-8 text-muted-foreground animate-pulse">Accessing records...</td></tr>
+                  <tr><td colSpan={5} className="text-center py-8 text-muted-foreground animate-pulse">กำลังโหลดข้อมูล...</td></tr>
                 ) : warnings?.length === 0 ? (
-                  <tr><td colSpan={5} className="text-center py-8 text-muted-foreground">No warnings logged for this deployment.</td></tr>
+                  <tr><td colSpan={5} className="text-center py-8 text-muted-foreground">ไม่มีคำเตือนในเซิร์ฟเวอร์นี้</td></tr>
                 ) : (
                   warnings?.map((w) => (
                     <tr key={w.id}>
                       <td className="text-muted-foreground">#{w.id}</td>
                       <td className="text-foreground">{w.userId}</td>
-                      <td className="whitespace-normal min-w-[200px] font-sans">{w.reason || "No reason provided"}</td>
-                      <td className="text-muted-foreground text-xs whitespace-nowrap">{format(new Date(w.createdAt), "MMM d, yyyy HH:mm")}</td>
+                      <td className="whitespace-normal min-w-[200px] font-sans">{w.reason || "ไม่ระบุเหตุผล"}</td>
+                      <td className="text-muted-foreground text-xs whitespace-nowrap">{format(new Date(w.createdAt), "d MMM yyyy HH:mm")}</td>
                       <td>
                         <Button 
                           variant="ghost" 
@@ -299,16 +299,16 @@ function WarningsTab({ guildId }: { guildId: string }) {
       </div>
 
       <div className="space-y-4">
-        <h2 className="text-sm font-mono uppercase tracking-wider text-primary">Top Offenders</h2>
+        <h2 className="text-sm font-mono uppercase tracking-wider text-primary">ผู้ฝ่าฝืนสูงสุด</h2>
         <Card className="border-border/50 bg-card/30">
           <div className="p-4 space-y-4">
             {!stats || stats.length === 0 ? (
-              <div className="text-sm text-muted-foreground text-center py-4 font-mono">Clean record.</div>
+              <div className="text-sm text-muted-foreground text-center py-4 font-mono">ไม่มีประวัติ</div>
             ) : (
               stats.slice(0, 5).map((stat, i) => (
                 <div key={stat.userId} className="flex items-center justify-between border-b border-border/50 last:border-0 pb-3 last:pb-0">
                   <div className="font-mono text-sm">{stat.userId}</div>
-                  <Badge variant="destructive" className="font-mono bg-destructive/10 text-destructive">{stat.count} strikes</Badge>
+                  <Badge variant="destructive" className="font-mono bg-destructive/10 text-destructive">{stat.count} ครั้ง</Badge>
                 </div>
               ))
             )}
@@ -327,17 +327,17 @@ function QueueTab({ guildId }: { guildId: string }) {
   const handleReset = () => {
     resetQueue.mutate({ guildId }, {
       onSuccess: () => {
-        toast.success("Queue buffer flushed.")
+        toast.success("ล้างคิวเรียบร้อย")
         queryClient.invalidateQueries({ queryKey: getGetQueueQueryKey(guildId) })
       },
-      onError: () => toast.error("Failed to flush queue.")
+      onError: () => toast.error("ล้างคิวไม่สำเร็จ")
     })
   }
 
   return (
     <div className="max-w-4xl space-y-6">
       <div className="flex items-center justify-between">
-        <h2 className="text-sm font-mono uppercase tracking-wider text-primary">Audio Buffer</h2>
+        <h2 className="text-sm font-mono uppercase tracking-wider text-primary">คิวเสียง</h2>
         <Button 
           variant="destructive" 
           size="sm" 
@@ -346,7 +346,7 @@ function QueueTab({ guildId }: { guildId: string }) {
           className="font-mono uppercase text-xs tracking-wider"
         >
           <RefreshCw className={`w-3.5 h-3.5 mr-2 ${resetQueue.isPending ? 'animate-spin' : ''}`} />
-          Flush Buffer
+          ล้างคิว
         </Button>
       </div>
 
@@ -355,16 +355,16 @@ function QueueTab({ guildId }: { guildId: string }) {
           <table className="w-full data-table">
             <thead>
               <tr>
-                <th className="w-24">Pos</th>
-                <th>User ID</th>
-                <th>Time Added</th>
+                <th className="w-24">ลำดับ</th>
+                <th>รหัสผู้ใช้</th>
+                <th>เวลาที่เพิ่ม</th>
               </tr>
             </thead>
             <tbody>
               {isLoading ? (
-                <tr><td colSpan={3} className="text-center py-8 text-muted-foreground animate-pulse">Reading buffer...</td></tr>
+                <tr><td colSpan={3} className="text-center py-8 text-muted-foreground animate-pulse">กำลังโหลดคิว...</td></tr>
               ) : queue?.length === 0 ? (
-                <tr><td colSpan={3} className="text-center py-8 text-muted-foreground">Buffer is empty.</td></tr>
+                <tr><td colSpan={3} className="text-center py-8 text-muted-foreground">คิวว่างเปล่า</td></tr>
               ) : (
                 queue?.map((q) => (
                   <tr key={`${q.userId}-${q.position}`}>
@@ -400,20 +400,20 @@ function BannedWordsTab({ guildId }: { guildId: string }) {
     addWord.mutate({ guildId, data: { word: newWord.trim().toLowerCase() } }, {
       onSuccess: () => {
         setNewWord("")
-        toast.success("Pattern added to filter.")
+        toast.success("เพิ่มคำเรียบร้อย")
         queryClient.invalidateQueries({ queryKey: getListBannedWordsQueryKey(guildId) })
       },
-      onError: () => toast.error("Failed to add pattern.")
+      onError: () => toast.error("เพิ่มคำไม่สำเร็จ")
     })
   }
 
   const handleDelete = (word: string) => {
     deleteWord.mutate({ guildId, word }, {
       onSuccess: () => {
-        toast.success("Pattern removed from filter.")
+        toast.success("ลบคำเรียบร้อย")
         queryClient.invalidateQueries({ queryKey: getListBannedWordsQueryKey(guildId) })
       },
-      onError: () => toast.error("Failed to remove pattern.")
+      onError: () => toast.error("ลบคำไม่สำเร็จ")
     })
   }
 
@@ -421,27 +421,27 @@ function BannedWordsTab({ guildId }: { guildId: string }) {
     <div className="max-w-3xl space-y-6">
       <Card className="border-border/50 bg-card/30">
         <CardHeader>
-          <CardTitle className="uppercase tracking-wider text-sm font-mono text-primary">Content Filter Patterns</CardTitle>
-          <CardDescription className="font-mono text-xs">Words matching these patterns will be blocked by Automod.</CardDescription>
+          <CardTitle className="uppercase tracking-wider text-sm font-mono text-primary">คำต้องห้าม</CardTitle>
+          <CardDescription className="font-mono text-xs">คำที่อยู่ในรายการนี้จะถูกบล็อกโดยระบบออโต้มอด</CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
           <form onSubmit={handleAdd} className="flex gap-3">
             <Input 
               value={newWord}
               onChange={(e) => setNewWord(e.target.value)}
-              placeholder="Enter word or pattern..."
+              placeholder="พิมพ์คำที่ต้องการบล็อก..."
               className="font-mono"
             />
             <Button type="submit" disabled={addWord.isPending || !newWord.trim()} className="font-mono uppercase text-xs tracking-wider">
-              <Plus className="w-4 h-4 mr-2" /> Add Pattern
+              <Plus className="w-4 h-4 mr-2" /> เพิ่มคำ
             </Button>
           </form>
 
           <div className="flex flex-wrap gap-2 pt-4 border-t border-border/50">
             {isLoading ? (
-              <div className="text-muted-foreground font-mono text-sm animate-pulse">Loading patterns...</div>
+              <div className="text-muted-foreground font-mono text-sm animate-pulse">กำลังโหลด...</div>
             ) : words?.length === 0 ? (
-              <div className="text-muted-foreground font-mono text-sm">No patterns configured.</div>
+              <div className="text-muted-foreground font-mono text-sm">ยังไม่มีคำต้องห้าม</div>
             ) : (
               words?.map((w) => (
                 <div key={w.word} className="flex items-center gap-2 bg-destructive/10 border border-destructive/20 text-destructive px-3 py-1.5 rounded-sm font-mono text-sm group">
@@ -478,42 +478,42 @@ function CustomCommandsTab({ guildId }: { guildId: string }) {
     addCmd.mutate({ guildId, data: { name: newCmd.name.trim().toLowerCase(), response: newCmd.response } }, {
       onSuccess: () => {
         setNewCmd({ name: "", response: "" })
-        toast.success("Command sequence registered.")
+        toast.success("เพิ่มคำสั่งเรียบร้อย")
         queryClient.invalidateQueries({ queryKey: getListCustomCommandsQueryKey(guildId) })
       },
-      onError: () => toast.error("Failed to register command sequence.")
+      onError: () => toast.error("เพิ่มคำสั่งไม่สำเร็จ")
     })
   }
 
   const handleDelete = (name: string) => {
     deleteCmd.mutate({ guildId, commandName: name }, {
       onSuccess: () => {
-        toast.success("Command sequence purged.")
+        toast.success("ลบคำสั่งเรียบร้อย")
         queryClient.invalidateQueries({ queryKey: getListCustomCommandsQueryKey(guildId) })
       },
-      onError: () => toast.error("Failed to purge sequence.")
+      onError: () => toast.error("ลบคำสั่งไม่สำเร็จ")
     })
   }
 
   return (
     <div className="grid md:grid-cols-3 gap-8">
       <div className="md:col-span-2 space-y-4">
-        <h2 className="text-sm font-mono uppercase tracking-wider text-primary">Registered Sequences</h2>
+        <h2 className="text-sm font-mono uppercase tracking-wider text-primary">คำสั่งที่ลงทะเบียน</h2>
         <Card className="border-border/50 bg-card/30">
           <div className="overflow-x-auto">
             <table className="w-full data-table">
               <thead>
                 <tr>
-                  <th className="w-1/4">Trigger</th>
-                  <th>Payload</th>
-                  <th className="w-16">Action</th>
+                  <th className="w-1/4">คีย์เวิร์ด</th>
+                  <th>ข้อความตอบกลับ</th>
+                  <th className="w-16">จัดการ</th>
                 </tr>
               </thead>
               <tbody>
                 {isLoading ? (
-                  <tr><td colSpan={3} className="text-center py-8 text-muted-foreground animate-pulse">Loading sequences...</td></tr>
+                  <tr><td colSpan={3} className="text-center py-8 text-muted-foreground animate-pulse">กำลังโหลด...</td></tr>
                 ) : commands?.length === 0 ? (
-                  <tr><td colSpan={3} className="text-center py-8 text-muted-foreground">No custom sequences registered.</td></tr>
+                  <tr><td colSpan={3} className="text-center py-8 text-muted-foreground">ยังไม่มีคำสั่งกำหนดเอง</td></tr>
                 ) : (
                   commands?.map((cmd) => (
                     <tr key={cmd.name}>
@@ -540,12 +540,12 @@ function CustomCommandsTab({ guildId }: { guildId: string }) {
       </div>
 
       <div className="space-y-4">
-        <h2 className="text-sm font-mono uppercase tracking-wider text-primary">New Sequence</h2>
+        <h2 className="text-sm font-mono uppercase tracking-wider text-primary">เพิ่มคำสั่งใหม่</h2>
         <Card className="border-border/50 bg-card/30">
           <CardContent className="pt-6">
             <form onSubmit={handleAdd} className="space-y-4">
               <div className="space-y-1.5">
-                <label className="text-xs font-mono text-muted-foreground uppercase">Trigger Phrase</label>
+                <label className="text-xs font-mono text-muted-foreground uppercase">คีย์เวิร์ด</label>
                 <div className="relative">
                   <span className="absolute left-3 top-2.5 text-muted-foreground font-mono">!</span>
                   <Input 
@@ -557,16 +557,16 @@ function CustomCommandsTab({ guildId }: { guildId: string }) {
                 </div>
               </div>
               <div className="space-y-1.5">
-                <label className="text-xs font-mono text-muted-foreground uppercase">Payload Response</label>
+                <label className="text-xs font-mono text-muted-foreground uppercase">ข้อความตอบกลับ</label>
                 <textarea 
                   value={newCmd.response}
                   onChange={(e) => setNewCmd({ ...newCmd, response: e.target.value })}
                   className="flex min-h-[100px] w-full border border-border bg-input px-3 py-2 text-sm font-sans placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary transition-colors resize-y"
-                  placeholder="Enter the bot's response..."
+                  placeholder="พิมพ์ข้อความตอบกลับของบอท..."
                 />
               </div>
               <Button type="submit" className="w-full font-mono uppercase tracking-widest" disabled={addCmd.isPending || !newCmd.name || !newCmd.response}>
-                <Plus className="w-4 h-4 mr-2" /> Register
+                <Plus className="w-4 h-4 mr-2" /> เพิ่มคำสั่ง
               </Button>
             </form>
           </CardContent>

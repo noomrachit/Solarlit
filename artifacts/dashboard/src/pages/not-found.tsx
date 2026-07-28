@@ -10,14 +10,14 @@ export default function NotFound() {
       </div>
       <h1 className="text-6xl font-mono font-bold text-destructive tracking-tighter">404</h1>
       <div className="space-y-2">
-        <h2 className="text-xl font-bold uppercase tracking-widest text-foreground">Sector Not Found</h2>
+        <h2 className="text-xl font-bold uppercase tracking-widest text-foreground">ไม่พบหน้านี้</h2>
         <p className="text-muted-foreground font-mono max-w-md mx-auto">
-          The requested operational sector does not exist or has been restricted. Return to mission control to re-orient.
+          หน้าที่คุณขอไม่มีอยู่หรือถูกจำกัดการเข้าถึง กรุณากลับไปยังหน้าหลัก
         </p>
       </div>
       <Link href="/">
         <Button className="font-mono uppercase tracking-widest mt-4">
-          Return to Overview
+          กลับหน้าหลัก
         </Button>
       </Link>
     </div>

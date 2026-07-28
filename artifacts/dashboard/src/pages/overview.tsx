@@ -21,18 +21,18 @@ export default function Overview() {
   }
 
   const statCards = [
-    { label: "Total Guilds", value: stats?.totalGuilds, icon: Server, color: "text-blue-400" },
-    { label: "Active Warnings", value: stats?.totalWarnings, icon: AlertTriangle, color: "text-yellow-400" },
-    { label: "Banned Words", value: stats?.totalBannedWords, icon: ShieldBan, color: "text-red-400" },
-    { label: "Custom Commands", value: stats?.totalCustomCommands, icon: Terminal, color: "text-green-400" },
-    { label: "Queue Entries", value: stats?.totalQueueEntries, icon: ListMusic, color: "text-purple-400" },
+    { label: "เซิร์ฟเวอร์ทั้งหมด", value: stats?.totalGuilds, icon: Server, color: "text-blue-400" },
+    { label: "คำเตือนที่ใช้งาน", value: stats?.totalWarnings, icon: AlertTriangle, color: "text-yellow-400" },
+    { label: "คำต้องห้าม", value: stats?.totalBannedWords, icon: ShieldBan, color: "text-red-400" },
+    { label: "คำสั่งกำหนดเอง", value: stats?.totalCustomCommands, icon: Terminal, color: "text-green-400" },
+    { label: "รายการในคิว", value: stats?.totalQueueEntries, icon: ListMusic, color: "text-purple-400" },
   ]
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
       <header className="space-y-2">
-        <h1 className="text-3xl font-bold tracking-tight uppercase">System Overview</h1>
-        <p className="text-muted-foreground font-mono text-sm">Real-time telemetry across all connected Discord environments.</p>
+        <h1 className="text-3xl font-bold tracking-tight uppercase">ภาพรวมระบบ</h1>
+        <p className="text-muted-foreground font-mono text-sm">ข้อมูลเรียลไทม์จากทุกเซิร์ฟเวอร์ Discord ที่เชื่อมต่อ</p>
       </header>
 
       {/* Stats Grid */}
@@ -59,10 +59,10 @@ export default function Overview() {
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold flex items-center gap-2 uppercase tracking-wide">
               <Activity className="w-4 h-4 text-primary" />
-              Guild Directory
+              รายการเซิร์ฟเวอร์
             </h2>
             <div className="text-xs font-mono text-muted-foreground">
-              {guilds?.length || 0} active deployments
+              {guilds?.length || 0} เซิร์ฟเวอร์ที่ใช้งาน
             </div>
           </div>
           
@@ -71,18 +71,18 @@ export default function Overview() {
               <table className="w-full data-table">
                 <thead>
                   <tr>
-                    <th>Guild ID</th>
-                    <th>Warnings</th>
-                    <th>Queue</th>
-                    <th>Automod</th>
-                    <th>Action</th>
+                    <th>รหัสเซิร์ฟเวอร์</th>
+                    <th>คำเตือน</th>
+                    <th>คิว</th>
+                    <th>ออโต้มอด</th>
+                    <th>จัดการ</th>
                   </tr>
                 </thead>
                 <tbody>
                   {guildsLoading ? (
-                    <tr><td colSpan={5} className="text-center py-8 text-muted-foreground animate-pulse">Loading telemetry data...</td></tr>
+                    <tr><td colSpan={5} className="text-center py-8 text-muted-foreground animate-pulse">กำลังโหลดข้อมูล...</td></tr>
                   ) : guilds?.length === 0 ? (
-                    <tr><td colSpan={5} className="text-center py-8 text-muted-foreground">No active guilds found.</td></tr>
+                    <tr><td colSpan={5} className="text-center py-8 text-muted-foreground">ไม่พบเซิร์ฟเวอร์ที่ใช้งาน</td></tr>
                   ) : (
                     guilds?.map((guild, idx) => (
                       <tr key={guild.guildId} className="group cursor-pointer" onClick={() => setLocation(`/guilds/${guild.guildId}`)} style={{ animationDelay: `${idx * 50}ms` }}>
@@ -92,11 +92,11 @@ export default function Overview() {
                         <td>
                           {guild.automodEnabled ? (
                             <span className="inline-flex items-center gap-1 text-green-400 bg-green-400/10 px-2 py-0.5 rounded text-[10px]">
-                              <span className="w-1.5 h-1.5 rounded-full bg-green-400"></span> ON
+                              <span className="w-1.5 h-1.5 rounded-full bg-green-400"></span> เปิด
                             </span>
                           ) : (
                             <span className="inline-flex items-center gap-1 text-muted-foreground bg-muted px-2 py-0.5 rounded text-[10px]">
-                              <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground"></span> OFF
+                              <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground"></span> ปิด
                             </span>
                           )}
                         </td>
@@ -115,25 +115,25 @@ export default function Overview() {
         <div className="space-y-4">
           <h2 className="text-lg font-semibold flex items-center gap-2 uppercase tracking-wide">
             <Search className="w-4 h-4 text-primary" />
-            Direct Access
+            เข้าถึงโดยตรง
           </h2>
           <Card className="bg-card/40 border-border/50">
             <CardHeader className="pb-4">
-              <CardTitle className="text-sm font-mono uppercase text-muted-foreground tracking-wider">Navigate to Deployment</CardTitle>
+              <CardTitle className="text-sm font-mono uppercase text-muted-foreground tracking-wider">ไปยังเซิร์ฟเวอร์</CardTitle>
             </CardHeader>
             <CardContent>
               <form onSubmit={handleSearch} className="space-y-4">
                 <div className="space-y-2">
                   <Input 
-                    placeholder="Enter Guild ID..." 
+                    placeholder="กรอก Guild ID..." 
                     value={searchId}
                     onChange={(e) => setSearchId(e.target.value)}
                     className="font-mono bg-background/50 border-primary/20 focus-visible:border-primary/50"
                   />
-                  <p className="text-[10px] text-muted-foreground font-mono">Accepts 18-19 digit Discord Snowflake.</p>
+                  <p className="text-[10px] text-muted-foreground font-mono">รองรับ Discord Snowflake 18-19 หลัก</p>
                 </div>
                 <Button type="submit" className="w-full font-mono uppercase tracking-widest" disabled={!searchId.trim()}>
-                  Initialize Connection
+                  เชื่อมต่อ
                 </Button>
               </form>
             </CardContent>
