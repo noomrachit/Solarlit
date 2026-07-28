@@ -118,11 +118,24 @@ async def on_ready():
         log.info(f"Synced {len(synced)} commands")
     except Exception as e:
         log.error(f"Sync failed: {e}")
-    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="Moonlit | /help"))
+    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="SoLARLIT | /help"))
     asyncio.create_task(start_health_server())
+    asyncio.create_task(autorole_task())
 
 @bot.event
 async def on_member_join(member: discord.Member):
+    # Track join time for autorole
+    try:
+        pool = await db.get_pool()
+        await pool.execute(
+            """INSERT INTO member_joins (guild_id, user_id, joined_at)
+               VALUES ($1, $2, NOW())
+               ON CONFLICT (guild_id, user_id) DO NOTHING""",
+            member.guild.id, member.id
+        )
+    except Exception as e:
+        log.error(f"Failed to track member join: {e}")
+
     settings = await get_settings(member.guild.id)
     channel_id = settings.get("welcome_channel")
     if not channel_id:
@@ -713,6 +726,102 @@ async def settings_logchannel(interaction: discord.Interaction, channel: discord
 
 tree.add_command(settings_group)
 
+# ─── Auto Role background task ──────────────────────────────────────────────
+
+async def autorole_task():
+    """ตรวจสอบและให้ยศอัตโนมัติทุก 30 นาที"""
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        try:
+            pool = await db.get_pool()
+            configs = await pool.fetch("SELECT guild_id, role_id, hours FROM autorole_config")
+            for config in configs:
+                guild = bot.get_guild(config["guild_id"])
+                if not guild:
+                    continue
+                role = guild.get_role(config["role_id"])
+                if not role:
+                    continue
+                threshold = datetime.now(timezone.utc) - timedelta(hours=config["hours"])
+                rows = await pool.fetch(
+                    """SELECT user_id FROM member_joins
+                       WHERE guild_id = $1
+                         AND joined_at <= $2
+                         AND role_assigned = FALSE""",
+                    config["guild_id"], threshold
+                )
+                for row in rows:
+                    member = guild.get_member(row["user_id"])
+                    if member and role not in member.roles:
+                        try:
+                            await member.add_roles(role, reason=f"Auto Role หลังอยู่ {config['hours']} ชั่วโมง")
+                            log.info(f"Auto Role: ให้ยศ {role.name} แก่ {member} ใน {guild.name}")
+                        except discord.Forbidden:
+                            log.warning(f"Auto Role: ไม่มีสิทธิ์ให้ยศใน {guild.name}")
+                    await pool.execute(
+                        "UPDATE member_joins SET role_assigned = TRUE WHERE guild_id = $1 AND user_id = $2",
+                        config["guild_id"], row["user_id"]
+                    )
+        except Exception as e:
+            log.error(f"Auto Role task error: {e}")
+        await asyncio.sleep(1800)  # รันทุก 30 นาที
+
+# ─── Auto Role commands ──────────────────────────────────────────────────────
+
+autorole_group = app_commands.Group(name="autorole", description="ตั้งค่าให้ยศอัตโนมัติหลังอยู่ครบเวลา")
+
+@autorole_group.command(name="set", description="ตั้งค่า Auto Role — ให้ยศอัตโนมัติเมื่อสมาชิกอยู่ครบเวลา")
+@app_commands.describe(role="ยศที่จะให้อัตโนมัติ", hours="จำนวนชั่วโมงที่ต้องอยู่ (ค่าเริ่มต้น 24)")
+@app_commands.checks.has_permissions(manage_roles=True)
+async def autorole_set(interaction: discord.Interaction, role: discord.Role, hours: app_commands.Range[int, 1, 720] = 24):
+    pool = await db.get_pool()
+    await pool.execute(
+        """INSERT INTO autorole_config (guild_id, role_id, hours)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (guild_id) DO UPDATE SET role_id = $2, hours = $3""",
+        interaction.guild.id, role.id, hours
+    )
+    embed = discord.Embed(title="✅ ตั้งค่า Auto Role แล้ว", color=0x57F287)
+    embed.add_field(name="ยศ", value=role.mention, inline=True)
+    embed.add_field(name="เวลา", value=f"`{hours} ชั่วโมง`", inline=True)
+    embed.set_footer(text="บอทจะตรวจสอบทุก 30 นาที")
+    await interaction.response.send_message(embed=embed)
+
+@autorole_group.command(name="disable", description="ปิด Auto Role")
+@app_commands.checks.has_permissions(manage_roles=True)
+async def autorole_disable(interaction: discord.Interaction):
+    pool = await db.get_pool()
+    deleted = await pool.execute(
+        "DELETE FROM autorole_config WHERE guild_id = $1", interaction.guild.id
+    )
+    if deleted == "DELETE 0":
+        await interaction.response.send_message("❌ ยังไม่ได้ตั้งค่า Auto Role", ephemeral=True)
+    else:
+        await interaction.response.send_message("✅ ปิด Auto Role แล้ว", ephemeral=True)
+
+@autorole_group.command(name="status", description="ดูสถานะ Auto Role ปัจจุบัน")
+async def autorole_status(interaction: discord.Interaction):
+    pool = await db.get_pool()
+    config = await pool.fetchrow(
+        "SELECT role_id, hours FROM autorole_config WHERE guild_id = $1", interaction.guild.id
+    )
+    if not config:
+        await interaction.response.send_message("❌ ยังไม่ได้ตั้งค่า Auto Role ใช้ `/autorole set` เพื่อเริ่มต้น", ephemeral=True)
+        return
+    role = interaction.guild.get_role(config["role_id"])
+    pending = await pool.fetchval(
+        """SELECT COUNT(*) FROM member_joins
+           WHERE guild_id = $1 AND role_assigned = FALSE""",
+        interaction.guild.id
+    )
+    embed = discord.Embed(title="⚙️ สถานะ Auto Role", color=0x5865F2)
+    embed.add_field(name="ยศ", value=role.mention if role else f"`{config['role_id']}`", inline=True)
+    embed.add_field(name="เวลา", value=f"`{config['hours']} ชั่วโมง`", inline=True)
+    embed.add_field(name="รอรับยศ", value=f"`{pending} คน`", inline=True)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+tree.add_command(autorole_group)
+
 # Ping
 @tree.command(name="ping", description="ตรวจสอบสถานะและความหน่วงของบอท")
 async def ping_cmd(interaction: discord.Interaction):
@@ -728,6 +837,7 @@ async def ping_cmd(interaction: discord.Interaction):
 async def help_cmd(interaction: discord.Interaction):
     embed = discord.Embed(title="SoLARLIT Bot — คำสั่งทั้งหมด", color=0x5865F2)
     embed.add_field(name="/ping", value="ตรวจสอบสถานะและความหน่วงของบอท", inline=False)
+    embed.add_field(name="/autorole", value="set • disable • status — ให้ยศอัตโนมัติหลังอยู่ครบเวลา", inline=False)
     embed.add_field(name="/mod", value="kick • ban • timeout • warn • warnings • clear", inline=False)
     embed.add_field(name="/welcome", value="channel • message • leave", inline=False)
     embed.add_field(name="/automod", value="toggle • anti_invite • anti_mention_spam • addword • removeword • listwords", inline=False)
