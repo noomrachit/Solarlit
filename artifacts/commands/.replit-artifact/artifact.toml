@@ -1,0 +1,27 @@
+kind = "web"
+previewPath = "/commands/"
+title = "SoLARLIT Commands"
+version = "1.0.0"
+id = "artifacts/commands"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/commands/" ]
+localPort = 19656
+
+[services.development]
+run = "pnpm --filter @workspace/commands run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/commands", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/commands/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "19656"
+BASE_PATH = "/commands/"

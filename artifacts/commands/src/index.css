@@ -1,0 +1,113 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=IBM+Plex+Sans+Thai:wght@400;500;600;700&display=swap');
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@plugin "@tailwindcss/typography";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+  
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-card-border: hsl(var(--card-border));
+  
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+
+  --font-sans: var(--app-font-sans);
+  --font-mono: var(--app-font-mono);
+  
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 2px);
+  --radius-xl: calc(var(--radius) + 6px);
+  --radius-2xl: calc(var(--radius) + 10px);
+  --radius-full: 9999px;
+}
+
+:root {
+  --background: 220 14% 96%;
+  --foreground: 220 7% 20%;
+  
+  --card: 0 0% 100%;
+  --card-foreground: 220 7% 20%;
+  --card-border: 220 13% 90%;
+  
+  --border: 220 13% 90%;
+  --input: 220 13% 90%;
+  --ring: 235 86% 65%;
+  
+  --primary: 235 86% 65%;
+  --primary-foreground: 0 0% 100%;
+  
+  --secondary: 220 13% 91%;
+  --secondary-foreground: 220 7% 20%;
+  
+  --muted: 220 13% 91%;
+  --muted-foreground: 220 5% 45%;
+  
+  --accent: 235 86% 65%;
+  --accent-foreground: 0 0% 100%;
+
+  --radius: 0.5rem;
+
+  --app-font-sans: 'IBM Plex Sans Thai', ui-sans-serif, system-ui, sans-serif;
+  --app-font-mono: 'Space Mono', ui-monospace, SFMono-Regular, monospace;
+}
+
+.dark {
+  --background: 220 14% 16%;
+  --foreground: 220 14% 96%;
+  
+  --card: 220 14% 18%;
+  --card-foreground: 220 14% 96%;
+  --card-border: 220 14% 24%;
+  
+  --border: 220 14% 24%;
+  --input: 220 14% 24%;
+  --ring: 235 86% 65%;
+  
+  --primary: 235 86% 65%;
+  --primary-foreground: 0 0% 100%;
+  
+  --secondary: 220 14% 22%;
+  --secondary-foreground: 220 14% 96%;
+  
+  --muted: 220 14% 22%;
+  --muted-foreground: 220 14% 65%;
+  
+  --accent: 235 86% 65%;
+  --accent-foreground: 0 0% 100%;
+}
+
+@layer utilities {
+  .hide-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .hide-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply font-sans antialiased bg-background text-foreground selection:bg-primary/20 selection:text-primary;
+  }
+}
