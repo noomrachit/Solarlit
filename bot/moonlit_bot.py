@@ -737,7 +737,11 @@ async def voice_create(
             category=category,
             reason=f"สร้างโดย {interaction.user}"
         )
-        embed = discord.Embed(title="🔊 สร้าง Voice Channel แล้ว", color=0x57F287, timestamp=datetime.now(timezone.utc))
+        embed = discord.Embed(
+            title="🔊 สร้าง Voice Channel แล้ว",
+            color=0x57F287,
+            timestamp=datetime.now(timezone.utc)
+        )
         embed.add_field(name="ชื่อ", value=channel.mention)
         embed.add_field(name="จำกัดคน", value=str(user_limit) if user_limit else "ไม่จำกัด")
         if category:
@@ -757,7 +761,12 @@ async def voice_delete(interaction: discord.Interaction, channel: discord.VoiceC
     name = channel.name
     try:
         await channel.delete(reason=f"ลบโดย {interaction.user}")
-        embed = discord.Embed(title="🗑️ ลบ Voice Channel แล้ว", description=f"ลบห้อง `{name}` เรียบร้อย", color=0xED4245, timestamp=datetime.now(timezone.utc))
+        embed = discord.Embed(
+            title="🗑️ ลบ Voice Channel แล้ว",
+            description=f"ลบห้อง `{name}` เรียบร้อย",
+            color=0xED4245,
+            timestamp=datetime.now(timezone.utc)
+        )
         embed.set_footer(text=f"โดย {interaction.user}")
         await interaction.response.send_message(embed=embed)
         await send_log(interaction.guild, embed)
@@ -769,11 +778,18 @@ async def voice_delete(interaction: discord.Interaction, channel: discord.VoiceC
 @voice_group.command(name="limit", description="ตั้งจำนวนคนสูงสุดใน Voice Channel")
 @has_mod_perms()
 @app_commands.describe(channel="ห้องเสียง", user_limit="จำนวนคนสูงสุด (0 = ไม่จำกัด)")
-async def voice_limit(interaction: discord.Interaction, channel: discord.VoiceChannel, user_limit: app_commands.Range[int, 0, 99]):
+async def voice_limit(
+    interaction: discord.Interaction,
+    channel: discord.VoiceChannel,
+    user_limit: app_commands.Range[int, 0, 99]
+):
     try:
         await channel.edit(user_limit=user_limit if user_limit > 0 else 0, reason=f"โดย {interaction.user}")
         limit_text = str(user_limit) if user_limit else "ไม่จำกัด"
-        await interaction.response.send_message(f"✅ ตั้ง `{channel.name}` จำกัด **{limit_text}** คนแล้ว", ephemeral=True)
+        await interaction.response.send_message(
+            f"✅ ตั้ง `{channel.name}` จำกัด **{limit_text}** คนแล้ว",
+            ephemeral=True
+        )
     except Exception as e:
         await interaction.response.send_message(f"❌ ล้มเหลว: {e}", ephemeral=True)
 
@@ -784,23 +800,49 @@ async def voice_rename(interaction: discord.Interaction, channel: discord.VoiceC
     old = channel.name
     try:
         await channel.edit(name=new_name, reason=f"โดย {interaction.user}")
-        await interaction.response.send_message(f"✅ เปลี่ยนชื่อ `{old}` → `{new_name}` แล้ว", ephemeral=True)
+        await interaction.response.send_message(
+            f"✅ เปลี่ยนชื่อ `{old}` → `{new_name}` แล้ว",
+            ephemeral=True
+        )
     except Exception as e:
         await interaction.response.send_message(f"❌ ล้มเหลว: {e}", ephemeral=True)
 
 tree.add_command(voice_group)
 
-# ─── Stage Channel commands ───────────────────────────────────────────────────
 
+# Stage Channels — ห้องกระจายเสียง / โทรโข่ง (ขึ้นเวที + คนฟัง)
 stage_group = app_commands.Group(name="stage", description="จัดการ Stage Channel (ห้องกระจายเสียง)")
 
 @stage_group.command(name="create", description="สร้าง Stage Channel (ห้องกระจายเสียง)")
 @has_mod_perms()
-@app_commands.describe(name="ชื่อห้องกระจายเสียง", topic="หัวข้อเวที (ไม่บังคับ)", category="หมวดหมู่ที่จะใส่ห้อง (ไม่บังคับ)")
-async def stage_create(interaction: discord.Interaction, name: str, topic: str = None, category: discord.CategoryChannel | None = None):
+@app_commands.describe(
+    name="ชื่อห้องกระจายเสียง",
+    topic="หัวข้อเวที (ไม่บังคับ)",
+    category="หมวดหมู่ที่จะใส่ห้อง (ไม่บังคับ)"
+)
+async def stage_create(
+    interaction: discord.Interaction,
+    name: str,
+    topic: str = None,
+    category: discord.CategoryChannel | None = None
+):
     try:
-        channel = await interaction.guild.create_stage_channel(name=name, topic=topic, category=category, reason=f"สร้างโดย {interaction.user}")
-        embed = discord.Embed(title="📢 สร้าง Stage Channel แล้ว", color=0xFEE75C, timestamp=datetime.now(timezone.utc))
+        channel = await interaction.guild.create_stage_channel(
+            name=name,
+            category=category,
+            reason=f"สร้างโดย {interaction.user}"
+        )
+        # topic ไม่รองรับตอน create — ตั้งทีหลัง
+        if topic:
+            try:
+                await channel.edit(topic=topic, reason=f"ตั้งหัวข้อโดย {interaction.user}")
+            except Exception:
+                pass
+        embed = discord.Embed(
+            title="📢 สร้าง Stage Channel แล้ว",
+            color=0xFEE75C,
+            timestamp=datetime.now(timezone.utc)
+        )
         embed.add_field(name="ชื่อ", value=channel.mention)
         if topic:
             embed.add_field(name="หัวข้อ", value=topic, inline=False)
@@ -821,7 +863,12 @@ async def stage_delete(interaction: discord.Interaction, channel: discord.StageC
     name = channel.name
     try:
         await channel.delete(reason=f"ลบโดย {interaction.user}")
-        embed = discord.Embed(title="🗑️ ลบ Stage Channel แล้ว", description=f"ลบห้อง `{name}` เรียบร้อย", color=0xED4245, timestamp=datetime.now(timezone.utc))
+        embed = discord.Embed(
+            title="🗑️ ลบ Stage Channel แล้ว",
+            description=f"ลบห้อง `{name}` เรียบร้อย",
+            color=0xED4245,
+            timestamp=datetime.now(timezone.utc)
+        )
         embed.set_footer(text=f"โดย {interaction.user}")
         await interaction.response.send_message(embed=embed)
         await send_log(interaction.guild, embed)
@@ -836,7 +883,10 @@ async def stage_delete(interaction: discord.Interaction, channel: discord.StageC
 async def stage_topic(interaction: discord.Interaction, channel: discord.StageChannel, topic: str):
     try:
         await channel.edit(topic=topic, reason=f"โดย {interaction.user}")
-        await interaction.response.send_message(f"✅ ตั้งหัวข้อ `{channel.name}` เป็น **{topic}** แล้ว", ephemeral=True)
+        await interaction.response.send_message(
+            f"✅ ตั้งหัวข้อ `{channel.name}` เป็น **{topic}** แล้ว",
+            ephemeral=True
+        )
     except Exception as e:
         await interaction.response.send_message(f"❌ ล้มเหลว: {e}", ephemeral=True)
 
@@ -847,7 +897,10 @@ async def stage_rename(interaction: discord.Interaction, channel: discord.StageC
     old = channel.name
     try:
         await channel.edit(name=new_name, reason=f"โดย {interaction.user}")
-        await interaction.response.send_message(f"✅ เปลี่ยนชื่อ `{old}` → `{new_name}` แล้ว", ephemeral=True)
+        await interaction.response.send_message(
+            f"✅ เปลี่ยนชื่อ `{old}` → `{new_name}` แล้ว",
+            ephemeral=True
+        )
     except Exception as e:
         await interaction.response.send_message(f"❌ ล้มเหลว: {e}", ephemeral=True)
 
