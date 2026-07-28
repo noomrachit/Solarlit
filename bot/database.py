@@ -81,19 +81,5 @@ async def init_db():
                 word TEXT NOT NULL,
                 PRIMARY KEY (guild_id, word)
             );
-
-            CREATE TABLE IF NOT EXISTS autorole_config (
-                guild_id BIGINT PRIMARY KEY,
-                role_id BIGINT NOT NULL,
-                hours INTEGER DEFAULT 24
-            );
-
-            CREATE TABLE IF NOT EXISTS member_joins (
-                guild_id BIGINT NOT NULL,
-                user_id BIGINT NOT NULL,
-                joined_at TIMESTAMPTZ DEFAULT NOW(),
-                role_assigned BOOLEAN DEFAULT FALSE,
-                PRIMARY KEY (guild_id, user_id)
-            );
         """)
     print("Database schema initialized")
