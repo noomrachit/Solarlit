@@ -11,6 +11,8 @@ const CATEGORIES = [
   "คำสั่งกำหนดเอง",
   "รีแอคชั่นโรล",
   "คิว",
+  "ห้องเสียง",
+  "ห้องกระจายเสียง",
   "ตั้งค่า"
 ] as const;
 
@@ -45,6 +47,14 @@ const COMMANDS = [
   { name: "/queue list", category: "คิว", desc: "ดูรายชื่อในคิว" },
   { name: "/queue reset", category: "คิว", desc: "รีเซ็ตคิวทั้งหมด" },
   { name: "/queue panel", category: "คิว", desc: "โพสต์แผงควบคุมคิว" },
+  { name: "/voice create", category: "ห้องเสียง", desc: "สร้าง Voice Channel ใหม่" },
+  { name: "/voice delete", category: "ห้องเสียง", desc: "ลบ Voice Channel" },
+  { name: "/voice limit", category: "ห้องเสียง", desc: "ตั้งจำนวนคนสูงสุดใน Voice Channel" },
+  { name: "/voice rename", category: "ห้องเสียง", desc: "เปลี่ยนชื่อ Voice Channel" },
+  { name: "/stage create", category: "ห้องกระจายเสียง", desc: "สร้าง Stage Channel (ห้องกระจายเสียง)" },
+  { name: "/stage delete", category: "ห้องกระจายเสียง", desc: "ลบ Stage Channel" },
+  { name: "/stage topic", category: "ห้องกระจายเสียง", desc: "ตั้งหัวข้อเวทีของ Stage Channel" },
+  { name: "/stage rename", category: "ห้องกระจายเสียง", desc: "เปลี่ยนชื่อ Stage Channel" },
   { name: "/supportpanel panel", category: "ตั้งค่า", desc: "โพสต์แผงระบบช่วยเหลือ" },
   { name: "/settings logchannel", category: "ตั้งค่า", desc: "ตั้งช่อง log สำหรับบันทึกกิจกรรม" },
 ];
