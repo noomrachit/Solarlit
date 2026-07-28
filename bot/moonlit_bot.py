@@ -853,6 +853,40 @@ async def stage_rename(interaction: discord.Interaction, channel: discord.StageC
 
 tree.add_command(stage_group)
 
+# Invite
+@tree.command(name="invite", description="รับลิงก์เชิญบอทเข้าเซิร์ฟเวอร์ (พร้อม permission ครบ)")
+async def invite_cmd(interaction: discord.Interaction):
+    perms = discord.Permissions(
+        kick_members=True,
+        ban_members=True,
+        manage_channels=True,
+        manage_roles=True,
+        moderate_members=True,
+        view_channel=True,
+        send_messages=True,
+        manage_messages=True,
+        embed_links=True,
+        attach_files=True,
+        read_message_history=True,
+        add_reactions=True,
+        use_external_emojis=True,
+    )
+    url = discord.utils.oauth_url(
+        client_id=str(bot.user.id),
+        permissions=perms,
+        scopes=("bot", "applications.commands"),
+    )
+    embed = discord.Embed(title="เชิญ SoLARLIT เข้าเซิร์ฟเวอร์", color=0x5865F2)
+    embed.description = f"[คลิกที่นี่เพื่อเชิญบอท]({url})"
+    embed.add_field(name="Permissions ที่ขอ", value=(
+        "Kick/Ban Members • Manage Channels\n"
+        "Manage Roles • Moderate Members\n"
+        "Send Messages • Manage Messages\n"
+        "Embed Links • Read History • Add Reactions"
+    ), inline=False)
+    embed.set_footer(text="ต้องการ Manage Channels สำหรับคำสั่ง /voice และ /stage")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
 # Ping
 @tree.command(name="ping", description="ตรวจสอบสถานะและความหน่วงของบอท")
 async def ping_cmd(interaction: discord.Interaction):
@@ -868,6 +902,7 @@ async def ping_cmd(interaction: discord.Interaction):
 async def help_cmd(interaction: discord.Interaction):
     embed = discord.Embed(title="SoLARLIT Bot — คำสั่งทั้งหมด", color=0x5865F2)
     embed.add_field(name="/ping", value="ตรวจสอบสถานะและความหน่วงของบอท", inline=False)
+    embed.add_field(name="/invite", value="รับลิงก์เชิญบอทพร้อม permission ครบ", inline=False)
     embed.add_field(name="/mod", value="kick • ban • timeout • warn • warnings • clear", inline=False)
     embed.add_field(name="/welcome", value="channel • message • leave", inline=False)
     embed.add_field(name="/automod", value="toggle • anti_invite • anti_mention_spam • addword • removeword • listwords", inline=False)
