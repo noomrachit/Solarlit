@@ -1,0 +1,14 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "M326lylqzXmeNIuGllCK6"
+uri = "file://moonlit-bot-source.zip"
+type = "unspecified"
+title = "moonlit-bot-source.zip"
+
+[[outputs]]
+id = "HM0_shBstXM3vUCIqsvQZ"
+uri = "file://moonlit-bot-full.zip"
+type = "unspecified"
+title = "moonlit-bot-full.zip"
