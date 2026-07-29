@@ -1,5 +1,0 @@
-[phases.install]
-cmds = ["pip install -r requirements.txt"]
-
-[start]
-cmd = "python moonlit_bot.py"
