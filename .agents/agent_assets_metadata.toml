@@ -12,3 +12,9 @@ id = "HM0_shBstXM3vUCIqsvQZ"
 uri = "file://moonlit-bot-full.zip"
 type = "unspecified"
 title = "moonlit-bot-full.zip"
+
+[[outputs]]
+id = "Vfg5zztQFaufD2jMT345U"
+uri = "file://moonlit-bot-all.zip"
+type = "unspecified"
+title = "moonlit-bot-all.zip"
