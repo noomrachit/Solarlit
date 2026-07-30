@@ -83,3 +83,12 @@ async def init_db():
             );
         """)
     print("Database schema initialized")
+    def _normalize_database_url(url: str) -> str:
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://"):]
+    lower = url.lower()
+    is_local = "localhost" in lower or "127.0.0.1" in lower
+    if not is_local and "sslmode=" not in lower:
+        sep = "&" if "?" in url else "?"
+        url = f"{url}{sep}sslmode=require"
+    return url
