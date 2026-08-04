@@ -77,7 +77,7 @@ def has_mod_perms():
             or perms.administrator
         )
     return app_commands.check(predicate)
-       
+
 # ─────────────────────────────────────────────
 # Automatic Error Handling
 # ─────────────────────────────────────────────
@@ -329,6 +329,8 @@ async def mod_ban(interaction: discord.Interaction, member: discord.Member, reas
     if member.top_role >= interaction.user.top_role and interaction.user != interaction.guild.owner:
         return await interaction.response.send_message("คุณไม่มีสิทธิ์แบนคนนี้", ephemeral=True)
     try:
+        # หมายเหตุ: discord.py บางเวอร์ชันใช้ delete_message_seconds แทน delete_message_days
+        # ถ้าเจอ TypeError ให้เปลี่ยนเป็น delete_message_seconds=delete_days * 86400
         await member.ban(reason=reason, delete_message_days=delete_days)
         embed = discord.Embed(title="🔨 Ban", color=0xFF0000, timestamp=datetime.now(timezone.utc))
         embed.add_field(name="User", value=f"{member} (`{member.id}`)")
@@ -613,7 +615,7 @@ async def build_queue_embed(guild: discord.Guild) -> discord.Embed:
     """สร้าง embed แสดงรายการคิวปัจจุบัน"""
     pool = await db.get_pool()
     rows = await pool.fetch(
-        "SELECT user_id, position FROM queue WHERE guild_id = $1 ORDER BY position ASC LIMIT 30",
+        "SELECT user_id, position, called FROM queue WHERE guild_id = $1 ORDER BY position ASC LIMIT 30",
         guild.id
     )
     if not rows:
@@ -621,7 +623,10 @@ async def build_queue_embed(guild: discord.Guild) -> discord.Embed:
     else:
         lines = []
         for i, r in enumerate(rows, 1):
-            prefix = "▶️ " if i == 1 else f"`{i}.` "
+            if i == 1:
+                prefix = "🔔 " if r.get("called") else "▶️ "
+            else:
+                prefix = f"`{i}.` "
             lines.append(f"{prefix}<@{r['user_id']}>")
         description = "\n".join(lines)
 
@@ -677,16 +682,34 @@ class QueueBoardView(discord.ui.View):
 
     @discord.ui.button(label="เรียก", style=discord.ButtonStyle.green, custom_id="queue_board_call", row=0)
     async def call_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        pool = await db.get_pool()
-        row = await pool.fetchrow(
-            "SELECT user_id, position FROM queue WHERE guild_id = $1 ORDER BY position ASC LIMIT 1",
-            interaction.guild.id
-        )
+        try:
+            pool = await db.get_pool()
+            row = await pool.fetchrow(
+                "SELECT user_id, called FROM queue WHERE guild_id = $1 ORDER BY position ASC LIMIT 1",
+                interaction.guild.id
+            )
+        except Exception:
+            return await interaction.response.send_message("❌ เชื่อมต่อฐานข้อมูลไม่สำเร็จ", ephemeral=True)
+
         if not row:
             return await interaction.response.send_message("ตอนนี้ไม่มีคนในคิว", ephemeral=True)
 
+        if row.get("called"):
+            return await interaction.response.send_message(
+                "⚠️ คิวนี้ถูกเรียกไปแล้ว กด **จบ** ก่อนถ้าต้องการเรียกคนถัดไป",
+                ephemeral=True
+            )
+
         member = interaction.guild.get_member(row["user_id"])
         name = member.display_name if member else f"Unknown ({row['user_id']})"
+
+        try:
+            await pool.execute(
+                "UPDATE queue SET called = TRUE WHERE guild_id = $1 AND user_id = $2",
+                interaction.guild.id, row["user_id"]
+            )
+        except Exception:
+            return await interaction.response.send_message("❌ อัปเดตสถานะคิวไม่สำเร็จ", ephemeral=True)
 
         announce = discord.Embed(
             title="📢 ถึงคิวแล้ว!",
@@ -703,30 +726,37 @@ class QueueBoardView(discord.ui.View):
 
     @discord.ui.button(label="จบ", style=discord.ButtonStyle.red, custom_id="queue_board_end", row=0)
     async def end_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        pool = await db.get_pool()
-        row = await pool.fetchrow(
-            "SELECT user_id, position FROM queue WHERE guild_id = $1 ORDER BY position ASC LIMIT 1",
-            interaction.guild.id
-        )
+        try:
+            pool = await db.get_pool()
+            row = await pool.fetchrow(
+                "SELECT user_id FROM queue WHERE guild_id = $1 ORDER BY position ASC LIMIT 1",
+                interaction.guild.id
+            )
+        except Exception:
+            return await interaction.response.send_message("❌ เชื่อมต่อฐานข้อมูลไม่สำเร็จ", ephemeral=True)
+
         if not row:
             return await interaction.response.send_message("ตอนนี้ไม่มีคนในคิว", ephemeral=True)
 
         finished_id = row["user_id"]
-        await pool.execute(
-            "DELETE FROM queue WHERE guild_id = $1 AND user_id = $2",
-            interaction.guild.id, finished_id
-        )
 
-        # จัดลำดับใหม่
-        await pool.execute("""
-            WITH ordered AS (
-                SELECT user_id, ROW_NUMBER() OVER (ORDER BY position) AS new_pos
-                FROM queue WHERE guild_id = $1
+        try:
+            await pool.execute(
+                "DELETE FROM queue WHERE guild_id = $1 AND user_id = $2",
+                interaction.guild.id, finished_id
             )
-            UPDATE queue q SET position = o.new_pos
-            FROM ordered o
-            WHERE q.guild_id = $1 AND q.user_id = o.user_id
-        """, interaction.guild.id)
+            # จัดลำดับใหม่
+            await pool.execute("""
+                WITH ordered AS (
+                    SELECT user_id, ROW_NUMBER() OVER (ORDER BY position) AS new_pos
+                    FROM queue WHERE guild_id = $1
+                )
+                UPDATE queue q SET position = o.new_pos
+                FROM ordered o
+                WHERE q.guild_id = $1 AND q.user_id = o.user_id
+            """, interaction.guild.id)
+        except Exception:
+            return await interaction.response.send_message("❌ อัปเดตคิวไม่สำเร็จ", ephemeral=True)
 
         member = interaction.guild.get_member(finished_id)
         name = member.display_name if member else "สมาชิก"
@@ -741,8 +771,11 @@ class QueueBoardView(discord.ui.View):
 
     @discord.ui.button(label="รีเฟรช", style=discord.ButtonStyle.secondary, custom_id="queue_board_refresh", row=0)
     async def refresh_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        embed = await build_queue_embed(interaction.guild)
-        await interaction.response.edit_message(embed=embed, view=self)
+        try:
+            embed = await build_queue_embed(interaction.guild)
+            await interaction.response.edit_message(embed=embed, view=self)
+        except Exception:
+            await interaction.response.send_message("❌ รีเฟรชไม่สำเร็จ", ephemeral=True)
 
 
 queue_group = app_commands.Group(name="queue", description="ระบบคิว")
