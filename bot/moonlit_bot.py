@@ -1,3 +1,4 @@
+
 import os
 import asyncio
 import logging
@@ -585,83 +586,10 @@ async def rr_remove(interaction: discord.Interaction, message_id: str, emoji: st
 
 tree.add_command(rr_group)
 
-# Queue
-queue_group = app_commands.Group(name="queue", description="ระบบคิว")
+# ─────────────────────────────────────────────
+# Queue System (Fixed)
+# ─────────────────────────────────────────────
 
-@queue_group.command(name="join", description="เข้าคิว")
-async def queue_join(interaction: discord.Interaction):
-    pool = await db.get_pool()
-    exists = await pool.fetchval("SELECT 1 FROM queue WHERE guild_id = $1 AND user_id = $2", interaction.guild.id, interaction.user.id)
-    if exists:
-        return await interaction.response.send_message("คุณอยู่ในคิวแล้ว", ephemeral=True)
-    max_pos = await pool.fetchval("SELECT COALESCE(MAX(position), 0) FROM queue WHERE guild_id = $1", interaction.guild.id) or 0
-    await pool.execute(
-        "INSERT INTO queue (guild_id, user_id, position) VALUES ($1, $2, $3)",
-        interaction.guild.id, interaction.user.id, max_pos + 1
-    )
-    await interaction.response.send_message(f"เข้าคิวแล้ว ตำแหน่งที่ **{max_pos + 1}**", ephemeral=True)
-
-@queue_group.command(name="leave", description="ออกจากคิว")
-async def queue_leave(interaction: discord.Interaction):
-    pool = await db.get_pool()
-    await pool.execute("DELETE FROM queue WHERE guild_id = $1 AND user_id = $2", interaction.guild.id, interaction.user.id)
-    await interaction.response.send_message("ออกจากคิวแล้ว", ephemeral=True)
-
-@queue_group.command(name="list", description="ดูรายการคิว")
-async def queue_list(interaction: discord.Interaction):
-    pool = await db.get_pool()
-    rows = await pool.fetch(
-        "SELECT user_id, position FROM queue WHERE guild_id = $1 ORDER BY position ASC LIMIT 20",
-        interaction.guild.id
-    )
-    if not rows:
-        return await interaction.response.send_message("คิวว่าง", ephemeral=True)
-    text = "\n".join(f"**{r['position']}.** <@{r['user_id']}>" for r in rows)
-    embed = discord.Embed(title="📋 Queue", description=text, color=0x5865F2)
-    await interaction.response.send_message(embed=embed)
-
-@queue_group.command(name="reset", description="รีเซ็ตคิวทั้งหมด")
-@has_mod_perms()
-async def queue_reset(interaction: discord.Interaction):
-    pool = await db.get_pool()
-    await pool.execute("DELETE FROM queue WHERE guild_id = $1", interaction.guild.id)
-    await interaction.response.send_message("รีเซ็ตคิวแล้ว", ephemeral=True)
-
-@queue_group.command(name="panel", description="โพสต์แผงควบคุมคิว")
-@has_mod_perms()
-async def queue_panel(interaction: discord.Interaction):
-    embed = discord.Embed(
-        title="📋 Queue Panel",
-        description="กดปุ่มด้านล่างเพื่อเข้า/ออกคิว",
-        color=0x5865F2
-    )
-    view = QueueView()
-    await interaction.response.send_message(embed=embed, view=view)
-
-tree.add_command(queue_group)
-
-class QueueView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="เข้าคิว", style=discord.ButtonStyle.green, custom_id="queue_join")
-    async def join_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        pool = await db.get_pool()
-        exists = await pool.fetchval("SELECT 1 FROM queue WHERE guild_id = $1 AND user_id = $2", interaction.guild.id, interaction.user.id)
-        if exists:
-            return await interaction.response.send_message("คุณอยู่ในคิวแล้ว", ephemeral=True)
-        max_pos = await pool.fetchval("SELECT COALESCE(MAX(position), 0) FROM queue WHERE guild_id = $1", interaction.guild.id) or 0
-        await pool.execute(
-            "INSERT INTO queue (guild_id, user_id, position) VALUES ($1, $2, $3)",
-            interaction.guild.id, interaction.user.id, max_pos + 1
-        )
-        await interaction.response.send_message(f"เข้าคิวแล้ว ตำแหน่งที่ **{max_pos + 1}**", ephemeral=True)
-
-    @discord.ui.button(label="ออกจากคิว", style=discord.ButtonStyle.red, custom_id="queue_leave")
-    async def leave_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        pool = await db.get_pool()
-        await pool.execute("DELETE FROM queue WHERE guild_id = $1 AND user_id = $2", interaction.guild.id, interaction.user.id)
-        await interaction.response.send_message("ออกจากคิวแล้ว", ephemeral=True)
 async def build_queue_embed(guild: discord.Guild) -> discord.Embed:
     """สร้าง embed แสดงรายการคิวปัจจุบัน"""
     pool = await db.get_pool()
@@ -688,13 +616,36 @@ async def build_queue_embed(guild: discord.Guild) -> discord.Embed:
     return embed
 
 
+class QueueView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="เข้าคิว", style=discord.ButtonStyle.green, custom_id="queue_join")
+    async def join_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        pool = await db.get_pool()
+        exists = await pool.fetchval("SELECT 1 FROM queue WHERE guild_id = $1 AND user_id = $2", interaction.guild.id, interaction.user.id)
+        if exists:
+            return await interaction.response.send_message("คุณอยู่ในคิวแล้ว", ephemeral=True)
+        max_pos = await pool.fetchval("SELECT COALESCE(MAX(position), 0) FROM queue WHERE guild_id = $1", interaction.guild.id) or 0
+        await pool.execute(
+            "INSERT INTO queue (guild_id, user_id, position) VALUES ($1, $2, $3)",
+            interaction.guild.id, interaction.user.id, max_pos + 1
+        )
+        await interaction.response.send_message(f"เข้าคิวแล้ว ตำแหน่งที่ **{max_pos + 1}**", ephemeral=True)
+
+    @discord.ui.button(label="ออกจากคิว", style=discord.ButtonStyle.red, custom_id="queue_leave")
+    async def leave_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        pool = await db.get_pool()
+        await pool.execute("DELETE FROM queue WHERE guild_id = $1 AND user_id = $2", interaction.guild.id, interaction.user.id)
+        await interaction.response.send_message("ออกจากคิวแล้ว", ephemeral=True)
+
+
 class QueueBoardView(discord.ui.View):
     """กระดานคิวพร้อมปุ่มแอดมิน: เรียก / จบ / รีเฟรช"""
     def __init__(self):
         super().__init__(timeout=None)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        # ปุ่มรีเฟรชใช้ได้ทุกคน, ปุ่มเรียก/จบต้องเป็นแอดมิน
         if interaction.data and interaction.data.get("custom_id") == "queue_board_refresh":
             return True
         if not interaction.user.guild_permissions.manage_messages:
@@ -773,12 +724,61 @@ class QueueBoardView(discord.ui.View):
     async def refresh_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         embed = await build_queue_embed(interaction.guild)
         await interaction.response.edit_message(embed=embed, view=self)
-        @queue_group.command(name="board", description="โพสต์กระดานคิวสด (มีปุ่มเรียก/จบ สำหรับแอดมิน)")
+
+
+queue_group = app_commands.Group(name="queue", description="ระบบคิว")
+
+@queue_group.command(name="join", description="เข้าคิว")
+async def queue_join(interaction: discord.Interaction):
+    pool = await db.get_pool()
+    exists = await pool.fetchval("SELECT 1 FROM queue WHERE guild_id = $1 AND user_id = $2", interaction.guild.id, interaction.user.id)
+    if exists:
+        return await interaction.response.send_message("คุณอยู่ในคิวแล้ว", ephemeral=True)
+    max_pos = await pool.fetchval("SELECT COALESCE(MAX(position), 0) FROM queue WHERE guild_id = $1", interaction.guild.id) or 0
+    await pool.execute(
+        "INSERT INTO queue (guild_id, user_id, position) VALUES ($1, $2, $3)",
+        interaction.guild.id, interaction.user.id, max_pos + 1
+    )
+    await interaction.response.send_message(f"เข้าคิวแล้ว ตำแหน่งที่ **{max_pos + 1}**", ephemeral=True)
+
+@queue_group.command(name="leave", description="ออกจากคิว")
+async def queue_leave(interaction: discord.Interaction):
+    pool = await db.get_pool()
+    await pool.execute("DELETE FROM queue WHERE guild_id = $1 AND user_id = $2", interaction.guild.id, interaction.user.id)
+    await interaction.response.send_message("ออกจากคิวแล้ว", ephemeral=True)
+
+@queue_group.command(name="list", description="ดูรายการคิว")
+async def queue_list(interaction: discord.Interaction):
+    embed = await build_queue_embed(interaction.guild)
+    await interaction.response.send_message(embed=embed)
+
+@queue_group.command(name="reset", description="รีเซ็ตคิวทั้งหมด")
+@has_mod_perms()
+async def queue_reset(interaction: discord.Interaction):
+    pool = await db.get_pool()
+    await pool.execute("DELETE FROM queue WHERE guild_id = $1", interaction.guild.id)
+    await interaction.response.send_message("รีเซ็ตคิวแล้ว", ephemeral=True)
+
+@queue_group.command(name="panel", description="โพสต์แผงควบคุมคิว (เข้า/ออก)")
+@has_mod_perms()
+async def queue_panel(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="📋 Queue Panel",
+        description="กดปุ่มด้านล่างเพื่อเข้า/ออกคิว",
+        color=0x5865F2
+    )
+    view = QueueView()
+    await interaction.response.send_message(embed=embed, view=view)
+
+@queue_group.command(name="board", description="โพสต์กระดานคิวสด (มีปุ่มเรียก/จบ สำหรับแอดมิน)")
 @has_mod_perms()
 async def queue_board(interaction: discord.Interaction):
     embed = await build_queue_embed(interaction.guild)
     view = QueueBoardView()
     await interaction.response.send_message(embed=embed, view=view)
+
+tree.add_command(queue_group)
+
 # Support
 class SupportView(discord.ui.View):
     def __init__(self):
@@ -925,8 +925,7 @@ async def voice_rename(interaction: discord.Interaction, channel: discord.VoiceC
 
 tree.add_command(voice_group)
 
-
-# Stage Channels — ห้องกระจายเสียง / โทรโข่ง (ขึ้นเวที + คนฟัง)
+# Stage Channels
 stage_group = app_commands.Group(name="stage", description="จัดการ Stage Channel (ห้องกระจายเสียง)")
 
 @stage_group.command(name="create", description="สร้าง Stage Channel (ห้องกระจายเสียง)")
@@ -948,7 +947,6 @@ async def stage_create(
             category=category,
             reason=f"สร้างโดย {interaction.user}"
         )
-        # topic ไม่รองรับตอน create — ตั้งทีหลัง
         if topic:
             try:
                 await channel.edit(topic=topic, reason=f"ตั้งหัวข้อโดย {interaction.user}")
@@ -1077,7 +1075,7 @@ async def help_cmd(interaction: discord.Interaction):
     embed.add_field(name="/automod", value="toggle • anti_invite • anti_mention_spam • addword • removeword • listwords", inline=False)
     embed.add_field(name="/customcommand", value="add • remove • list • prefix", inline=False)
     embed.add_field(name="/reactionrole", value="add • remove", inline=False)
-    embed.add_field(name="/queue", value="join • leave • list • reset • panel", inline=False)
+    embed.add_field(name="/queue", value="join • leave • list • reset • panel • board", inline=False)
     embed.add_field(name="/voice", value="create • delete • limit • rename — จัดการห้องเสียง", inline=False)
     embed.add_field(name="/stage", value="create • delete • topic • rename — จัดการห้องกระจายเสียง", inline=False)
     embed.add_field(name="/supportpanel panel", value="โพสต์แผงช่วยเหลือ", inline=False)
