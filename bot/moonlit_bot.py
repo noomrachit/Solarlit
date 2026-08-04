@@ -54,11 +54,21 @@ def has_mod_perms():
     async def predicate(interaction: discord.Interaction) -> bool:
         if not interaction.guild:
             return False
-        # ใช้ Member จาก guild แทน interaction.user โดยตรง
+
+        # ดึง Member จาก guild โดยตรง เพื่อหลีกเลี่ยง NoneType
         member = interaction.guild.get_member(interaction.user.id)
         if member is None:
+            # ถ้าหา Member ไม่เจอใน cache ให้ลองใช้ interaction.user ถ้าเป็น Member
+            if isinstance(interaction.user, discord.Member):
+                member = interaction.user
+            else:
+                return False
+
+        try:
+            perms = member.guild_permissions
+        except AttributeError:
             return False
-        perms = member.guild_permissions
+
         return (
             perms.kick_members
             or perms.ban_members
@@ -67,7 +77,7 @@ def has_mod_perms():
             or perms.administrator
         )
     return app_commands.check(predicate)
-    
+       
 # ─────────────────────────────────────────────
 # Automatic Error Handling
 # ─────────────────────────────────────────────
