@@ -971,6 +971,7 @@ async def help_cmd(interaction: discord.Interaction):
 @bot.event
 async def setup_hook():
     bot.add_view(QueueView())
+    bot.add_view(QueueBoardView())
     bot.add_view(SupportView())
 
 async def main():
