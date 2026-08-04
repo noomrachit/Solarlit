@@ -110,5 +110,16 @@ async def init_db():
                 PRIMARY KEY (guild_id, word)
             );
             """
-        )
+        CREATE TABLE IF NOT EXISTS queue_history (
+    id          SERIAL PRIMARY KEY,
+    guild_id    BIGINT NOT NULL,
+    user_id     BIGINT NOT NULL,
+    action      TEXT NOT NULL,
+    actor_id    BIGINT,
+    position    INT,
+    created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_queue_history_guild
+    ON queue_history (guild_id, created_at DESC);
+        
     print("Database schema initialized")
