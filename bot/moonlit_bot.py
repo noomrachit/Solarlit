@@ -804,12 +804,31 @@ async def queue_list(interaction: discord.Interaction):
     embed = await build_queue_embed(interaction.guild)
     await interaction.response.send_message(embed=embed)
 
-@queue_group.command(name="reset", description="รีเซ็ตคิวทั้งหมด")
+@queue_group.command(name="clear", description="ล้างคิวทั้งหมด (ไม่ลบกระดาน)")
 @has_mod_perms()
-async def queue_reset(interaction: discord.Interaction):
+async def queue_clear(interaction: discord.Interaction):
+    """
+    ล้างคนในคิวทั้งหมดของ guild และแจ้งจำนวนคนที่ถูกล้างในข้อความตอบกลับ
+    หมายเหตุ: ไฟล์นี้ไม่มีตาราง queue_board (บอร์ดคิวไม่ได้เก็บ message_id ไว้ใน DB)
+    จึงไม่สามารถวนอัปเดต embed ของทุกบอร์ดอัตโนมัติได้ — ผู้ดูแลต้องกดปุ่ม "รีเฟรช"
+    บนกระดานคิวเองหลังใช้คำสั่งนี้ เพื่อให้ embed อัปเดตตาม
+    """
     pool = await db.get_pool()
+
+    count = await pool.fetchval(
+        "SELECT COUNT(*) FROM queue WHERE guild_id = $1",
+        interaction.guild.id
+    )
+
+    if not count:
+        return await interaction.response.send_message("ตอนนี้ไม่มีใครอยู่ในคิว", ephemeral=True)
+
     await pool.execute("DELETE FROM queue WHERE guild_id = $1", interaction.guild.id)
-    await interaction.response.send_message("รีเซ็ตคิวแล้ว", ephemeral=True)
+
+    await interaction.response.send_message(
+        f"✅ ล้างคิวทั้งหมดแล้ว ({count} คน) — กดปุ่ม \"รีเฟรช\" บนกระดานคิวเพื่ออัปเดตหน้าจอ",
+        ephemeral=True
+    )
 
 @queue_group.command(name="panel", description="โพสต์แผงควบคุมคิว (เข้า/ออก)")
 @has_mod_perms()
@@ -1127,7 +1146,7 @@ async def help_cmd(interaction: discord.Interaction):
     embed.add_field(name="/automod", value="toggle • anti_invite • anti_mention_spam • addword • removeword • listwords", inline=False)
     embed.add_field(name="/customcommand", value="add • remove • list • prefix", inline=False)
     embed.add_field(name="/reactionrole", value="add • remove", inline=False)
-    embed.add_field(name="/queue", value="join • leave • list • reset • panel • board", inline=False)
+    embed.add_field(name="/queue", value="join • leave • list • clear • panel • board", inline=False)
     embed.add_field(name="/voice", value="create • delete • limit • rename — จัดการห้องเสียง", inline=False)
     embed.add_field(name="/stage", value="create • delete • topic • rename — จัดการห้องกระจายเสียง", inline=False)
     embed.add_field(name="/supportpanel panel", value="โพสต์แผงช่วยเหลือ", inline=False)
