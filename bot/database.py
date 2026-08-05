@@ -111,6 +111,13 @@ async def init_db():
                 word TEXT NOT NULL,
                 PRIMARY KEY (guild_id, word)
             );
+
+            CREATE TABLE IF NOT EXISTS queue_board (
+                guild_id BIGINT NOT NULL,
+                channel_id BIGINT NOT NULL,
+                message_id BIGINT NOT NULL,
+                PRIMARY KEY (guild_id, channel_id)
+            );
             """
         )
 
@@ -120,4 +127,5 @@ async def init_db():
             """
             ALTER TABLE queue ADD COLUMN IF NOT EXISTS called BOOLEAN DEFAULT FALSE;
             """
+        )
         )
