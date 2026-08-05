@@ -110,7 +110,6 @@ async def init_db():
                 PRIMARY KEY (guild_id, word)
             );
             """
-                        """
         )
 
             
