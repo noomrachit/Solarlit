@@ -102,6 +102,7 @@ async def init_db():
                 user_id BIGINT NOT NULL,
                 position INTEGER,
                 joined_at TIMESTAMPTZ DEFAULT NOW(),
+                called BOOLEAN DEFAULT FALSE,
                 PRIMARY KEY (guild_id, user_id)
             );
 
@@ -113,4 +114,10 @@ async def init_db():
             """
         )
 
-            
+        # Migration: เผื่อตาราง queue เดิมถูกสร้างไปแล้วก่อนที่จะมีคอลัมน์ called
+        # (CREATE TABLE IF NOT EXISTS จะไม่แก้ตารางที่มีอยู่แล้ว จึงต้อง ALTER แยก)
+        await conn.execute(
+            """
+            ALTER TABLE queue ADD COLUMN IF NOT EXISTS called BOOLEAN DEFAULT FALSE;
+            """
+        )
