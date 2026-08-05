@@ -636,15 +636,74 @@ async def build_queue_embed(guild: discord.Guild) -> discord.Embed:
         color=0x5865F2,
         timestamp=datetime.now(timezone.utc)
     )
-    embed.set_footer(text="ปุ่มด้านล่างสำหรับแอดมินเท่านั้น • กดรีเฟรชเพื่ออัปเดต")
+    embed.set_footer(text="เข้า/ออกคิว: ทุกคน • เรียก/จบ: แอดมินเท่านั้น • กดรีเฟรชเพื่ออัปเดต")
     return embed
 
 
-class QueueView(discord.ui.View):
+async def refresh_all_boards(guild: discord.Guild):
+    """
+    อัปเดต embed ของกระดานคิวทุกอันที่เคยโพสต์ไว้ในกิลด์นี้ ให้เป็นเรียลไทม์
+    เรียกใช้หลังทุกจุดที่ทำให้คิวเปลี่ยนแปลง (เข้า/ออก/เรียก/จบ/ล้างคิว)
+    ไม่ว่าจะเปลี่ยนผ่านปุ่มบนกระดาน หรือผ่านสแลชคอมมานด์ก็ตาม
+    """
+    pool = await db.get_pool()
+    boards = await pool.fetch(
+        "SELECT channel_id, message_id FROM queue_board WHERE guild_id = $1",
+        guild.id
+    )
+    if not boards:
+        return
+
+    embed = await build_queue_embed(guild)
+    view = QueueFullBoardView()
+
+    for board in boards:
+        channel = guild.get_channel(board["channel_id"])
+        if not channel:
+            # ช่องถูกลบไปแล้ว เก็บกวาด record ทิ้ง
+            await pool.execute(
+                "DELETE FROM queue_board WHERE guild_id = $1 AND channel_id = $2",
+                guild.id, board["channel_id"]
+            )
+            continue
+        try:
+            msg = await channel.fetch_message(board["message_id"])
+            await msg.edit(embed=embed, view=view)
+        except discord.NotFound:
+            # ข้อความกระดานถูกลบไปแล้ว เก็บกวาด record ทิ้ง
+            await pool.execute(
+                "DELETE FROM queue_board WHERE guild_id = $1 AND channel_id = $2",
+                guild.id, board["channel_id"]
+            )
+        except Exception:
+            pass
+
+
+class QueueFullBoardView(discord.ui.View):
+    """
+    กระดานคิวรวม 5 ปุ่มในข้อความเดียว:
+    แถวบน (ทุกคนกดได้): เข้าคิว / ออกจากคิว
+    แถวล่าง (แอดมินเท่านั้น ยกเว้นรีเฟรช): เรียก / จบ / รีเฟรช
+    """
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="เข้าคิว", style=discord.ButtonStyle.green, custom_id="queue_join")
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        cid = interaction.data.get("custom_id") if interaction.data else None
+        # ปุ่มที่ทุกคนกดได้: เข้าคิว, ออกจากคิว, รีเฟรช
+        if cid in ("queue_join", "queue_leave", "queue_board_refresh"):
+            return True
+        # ปุ่มที่เหลือ (เรียก, จบ) ต้องมีสิทธิ์ manage_messages
+        if not interaction.user.guild_permissions.manage_messages:
+            await interaction.response.send_message(
+                "❌ คุณไม่มีสิทธิ์ใช้ปุ่มนี้ (ต้องมีสิทธิ์ Manage Messages)",
+                ephemeral=True
+            )
+            return False
+        return True
+
+    # ── แถวเข้า/ออกคิว (ทุกคน) ────────────────────────────────
+    @discord.ui.button(label="เข้าคิว", style=discord.ButtonStyle.green, custom_id="queue_join", row=0)
     async def join_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         pool = await db.get_pool()
         exists = await pool.fetchval("SELECT 1 FROM queue WHERE guild_id = $1 AND user_id = $2", interaction.guild.id, interaction.user.id)
@@ -656,31 +715,17 @@ class QueueView(discord.ui.View):
             interaction.guild.id, interaction.user.id, max_pos + 1
         )
         await interaction.response.send_message(f"เข้าคิวแล้ว ตำแหน่งที่ **{max_pos + 1}**", ephemeral=True)
+        await refresh_all_boards(interaction.guild)
 
-    @discord.ui.button(label="ออกจากคิว", style=discord.ButtonStyle.red, custom_id="queue_leave")
+    @discord.ui.button(label="ออกจากคิว", style=discord.ButtonStyle.red, custom_id="queue_leave", row=0)
     async def leave_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         pool = await db.get_pool()
         await pool.execute("DELETE FROM queue WHERE guild_id = $1 AND user_id = $2", interaction.guild.id, interaction.user.id)
         await interaction.response.send_message("ออกจากคิวแล้ว", ephemeral=True)
+        await refresh_all_boards(interaction.guild)
 
-
-class QueueBoardView(discord.ui.View):
-    """กระดานคิวพร้อมปุ่มแอดมิน: เรียก / จบ / รีเฟรช"""
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.data and interaction.data.get("custom_id") == "queue_board_refresh":
-            return True
-        if not interaction.user.guild_permissions.manage_messages:
-            await interaction.response.send_message(
-                "❌ คุณไม่มีสิทธิ์ใช้ปุ่มนี้ (ต้องมีสิทธิ์ Manage Messages)",
-                ephemeral=True
-            )
-            return False
-        return True
-
-    @discord.ui.button(label="เรียก", style=discord.ButtonStyle.green, custom_id="queue_board_call", row=0)
+    # ── แถวแอดมิน (เรียก / จบ / รีเฟรช) ───────────────────────
+    @discord.ui.button(label="เรียก", style=discord.ButtonStyle.green, custom_id="queue_board_call", row=1)
     async def call_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             pool = await db.get_pool()
@@ -717,14 +762,9 @@ class QueueBoardView(discord.ui.View):
             color=discord.Color.green()
         )
         await interaction.response.send_message(embed=announce)
+        await refresh_all_boards(interaction.guild)
 
-        try:
-            embed = await build_queue_embed(interaction.guild)
-            await interaction.message.edit(embed=embed, view=self)
-        except Exception:
-            pass
-
-    @discord.ui.button(label="จบ", style=discord.ButtonStyle.red, custom_id="queue_board_end", row=0)
+    @discord.ui.button(label="จบ", style=discord.ButtonStyle.red, custom_id="queue_board_end", row=1)
     async def end_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             pool = await db.get_pool()
@@ -762,20 +802,17 @@ class QueueBoardView(discord.ui.View):
         name = member.display_name if member else "สมาชิก"
 
         await interaction.response.send_message(f"✅ จบคิวของ **{name}** แล้ว", ephemeral=True)
+        await refresh_all_boards(interaction.guild)
 
-        try:
-            embed = await build_queue_embed(interaction.guild)
-            await interaction.message.edit(embed=embed, view=self)
-        except Exception:
-            pass
-
-    @discord.ui.button(label="รีเฟรช", style=discord.ButtonStyle.secondary, custom_id="queue_board_refresh", row=0)
+    @discord.ui.button(label="รีเฟรช", style=discord.ButtonStyle.secondary, custom_id="queue_board_refresh", row=1)
     async def refresh_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             embed = await build_queue_embed(interaction.guild)
             await interaction.response.edit_message(embed=embed, view=self)
         except Exception:
             await interaction.response.send_message("❌ รีเฟรชไม่สำเร็จ", ephemeral=True)
+            return
+        await refresh_all_boards(interaction.guild)
 
 
 queue_group = app_commands.Group(name="queue", description="ระบบคิว")
@@ -792,12 +829,14 @@ async def queue_join(interaction: discord.Interaction):
         interaction.guild.id, interaction.user.id, max_pos + 1
     )
     await interaction.response.send_message(f"เข้าคิวแล้ว ตำแหน่งที่ **{max_pos + 1}**", ephemeral=True)
+    await refresh_all_boards(interaction.guild)
 
 @queue_group.command(name="leave", description="ออกจากคิว")
 async def queue_leave(interaction: discord.Interaction):
     pool = await db.get_pool()
     await pool.execute("DELETE FROM queue WHERE guild_id = $1 AND user_id = $2", interaction.guild.id, interaction.user.id)
     await interaction.response.send_message("ออกจากคิวแล้ว", ephemeral=True)
+    await refresh_all_boards(interaction.guild)
 
 @queue_group.command(name="list", description="ดูรายการคิว")
 async def queue_list(interaction: discord.Interaction):
@@ -809,9 +848,7 @@ async def queue_list(interaction: discord.Interaction):
 async def queue_clear(interaction: discord.Interaction):
     """
     ล้างคนในคิวทั้งหมดของ guild และแจ้งจำนวนคนที่ถูกล้างในข้อความตอบกลับ
-    หมายเหตุ: ไฟล์นี้ไม่มีตาราง queue_board (บอร์ดคิวไม่ได้เก็บ message_id ไว้ใน DB)
-    จึงไม่สามารถวนอัปเดต embed ของทุกบอร์ดอัตโนมัติได้ — ผู้ดูแลต้องกดปุ่ม "รีเฟรช"
-    บนกระดานคิวเองหลังใช้คำสั่งนี้ เพื่อให้ embed อัปเดตตาม
+    หลังล้างแล้วจะอัปเดต embed ของทุกกระดานคิวที่โพสต์ไว้ในกิลด์นี้ให้อัตโนมัติ (real-time)
     """
     pool = await db.get_pool()
 
@@ -826,27 +863,28 @@ async def queue_clear(interaction: discord.Interaction):
     await pool.execute("DELETE FROM queue WHERE guild_id = $1", interaction.guild.id)
 
     await interaction.response.send_message(
-        f"✅ ล้างคิวทั้งหมดแล้ว ({count} คน) — กดปุ่ม \"รีเฟรช\" บนกระดานคิวเพื่ออัปเดตหน้าจอ",
+        f"✅ ล้างคิวทั้งหมดแล้ว ({count} คน)",
         ephemeral=True
     )
+    await refresh_all_boards(interaction.guild)
 
-@queue_group.command(name="panel", description="โพสต์แผงควบคุมคิว (เข้า/ออก)")
-@has_mod_perms()
-async def queue_panel(interaction: discord.Interaction):
-    embed = discord.Embed(
-        title="📋 Queue Panel",
-        description="กดปุ่มด้านล่างเพื่อเข้า/ออกคิว",
-        color=0x5865F2
-    )
-    view = QueueView()
-    await interaction.response.send_message(embed=embed, view=view)
-
-@queue_group.command(name="board", description="โพสต์กระดานคิวสด (มีปุ่มเรียก/จบ สำหรับแอดมิน)")
+@queue_group.command(name="board", description="โพสต์กระดานคิวสด (รวมปุ่มเข้า/ออกคิว + เรียก/จบ/รีเฟรช ในที่เดียว)")
 @has_mod_perms()
 async def queue_board(interaction: discord.Interaction):
     embed = await build_queue_embed(interaction.guild)
-    view = QueueBoardView()
+    view = QueueFullBoardView()
     await interaction.response.send_message(embed=embed, view=view)
+    msg = await interaction.original_response()
+
+    pool = await db.get_pool()
+    await pool.execute(
+        """
+        INSERT INTO queue_board (guild_id, channel_id, message_id)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (guild_id, channel_id) DO UPDATE SET message_id = EXCLUDED.message_id
+        """,
+        interaction.guild.id, interaction.channel.id, msg.id
+    )
 
 tree.add_command(queue_group)
 
@@ -1146,7 +1184,7 @@ async def help_cmd(interaction: discord.Interaction):
     embed.add_field(name="/automod", value="toggle • anti_invite • anti_mention_spam • addword • removeword • listwords", inline=False)
     embed.add_field(name="/customcommand", value="add • remove • list • prefix", inline=False)
     embed.add_field(name="/reactionrole", value="add • remove", inline=False)
-    embed.add_field(name="/queue", value="join • leave • list • clear • panel • board", inline=False)
+    embed.add_field(name="/queue", value="join • leave • list • clear • board (กระดานรวมเข้า/ออก/เรียก/จบ/รีเฟรช)", inline=False)
     embed.add_field(name="/voice", value="create • delete • limit • rename — จัดการห้องเสียง", inline=False)
     embed.add_field(name="/stage", value="create • delete • topic • rename — จัดการห้องกระจายเสียง", inline=False)
     embed.add_field(name="/supportpanel panel", value="โพสต์แผงช่วยเหลือ", inline=False)
@@ -1155,8 +1193,7 @@ async def help_cmd(interaction: discord.Interaction):
 
 @bot.event
 async def setup_hook():
-    bot.add_view(QueueView())
-    bot.add_view(QueueBoardView())
+    bot.add_view(QueueFullBoardView())
     bot.add_view(SupportView())
 
 async def main():
