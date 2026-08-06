@@ -33,10 +33,17 @@ async def get_pool() -> asyncpg.Pool:
 
 
 async def close_pool():
+    """ปิด pool อย่างปลอดภัย"""
     global _pool
     if _pool is not None:
         await _pool.close()
         _pool = None
+
+
+async def reset_pool() -> asyncpg.Pool:
+    """รีเซ็ต pool: ปิดของเก่า แล้วสร้างใหม่"""
+    await close_pool()
+    return await get_pool()
 
 
 async def init_db():
@@ -44,43 +51,93 @@ async def init_db():
     async with pool.acquire() as conn:
         await conn.execute(
             """
-            -- ห้องเสียงที่ต้องการติดตาม (ต่อกิลด์)
-            CREATE TABLE IF NOT EXISTS tracked_channels (
+            CREATE TABLE IF NOT EXISTS settings (
+                guild_id BIGINT PRIMARY KEY,
+                log_channel BIGINT,
+                welcome_channel BIGINT,
+                welcome_message TEXT DEFAULT 'ยินดีต้อนรับ {mention} เข้าสู่ {server}!',
+                leave_message TEXT,
+                prefix TEXT DEFAULT '!',
+                automod_enabled BOOLEAN DEFAULT FALSE,
+                anti_invite BOOLEAN DEFAULT FALSE,
+                anti_mention_spam BOOLEAN DEFAULT FALSE,
+                mention_limit INTEGER DEFAULT 5
+            );
+
+            CREATE TABLE IF NOT EXISTS warnings (
+                id SERIAL PRIMARY KEY,
+                guild_id BIGINT NOT NULL,
+                user_id BIGINT NOT NULL,
+                reason TEXT,
+                moderator_id BIGINT,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            );
+
+            CREATE TABLE IF NOT EXISTS custom_commands (
+                guild_id BIGINT NOT NULL,
+                name TEXT NOT NULL,
+                response TEXT NOT NULL,
+                PRIMARY KEY (guild_id, name)
+            );
+
+            CREATE TABLE IF NOT EXISTS reaction_roles (
+                message_id BIGINT NOT NULL,
+                emoji TEXT NOT NULL,
+                role_id BIGINT NOT NULL,
+                guild_id BIGINT,
+                PRIMARY KEY (message_id, emoji)
+            );
+
+            CREATE TABLE IF NOT EXISTS presence_logs (
+                guild_id BIGINT NOT NULL,
+                user_id BIGINT NOT NULL,
+                status TEXT,
+                last_seen TIMESTAMPTZ DEFAULT NOW(),
+                PRIMARY KEY (guild_id, user_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS queue (
+                guild_id BIGINT NOT NULL,
+                user_id BIGINT NOT NULL,
+                position INTEGER,
+                joined_at TIMESTAMPTZ DEFAULT NOW(),
+                called BOOLEAN DEFAULT FALSE,
+                PRIMARY KEY (guild_id, user_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS banned_words (
+                guild_id BIGINT NOT NULL,
+                word TEXT NOT NULL,
+                PRIMARY KEY (guild_id, word)
+            );
+
+            CREATE TABLE IF NOT EXISTS queue_board (
                 guild_id BIGINT NOT NULL,
                 channel_id BIGINT NOT NULL,
-                added_by BIGINT,
-                added_at TIMESTAMPTZ DEFAULT NOW(),
+                message_id BIGINT NOT NULL,
                 PRIMARY KEY (guild_id, channel_id)
             );
 
-            -- session การเข้า/ออกห้องเสียงของแต่ละคน
-            -- left_at เป็น NULL หมายถึงยังอยู่ในห้องขณะนี้ (session เปิดอยู่)
-            CREATE TABLE IF NOT EXISTS voice_sessions (
+            CREATE TABLE IF NOT EXISTS queue_bookings (
                 id SERIAL PRIMARY KEY,
                 guild_id BIGINT NOT NULL,
-                channel_id BIGINT NOT NULL,
                 user_id BIGINT NOT NULL,
-                joined_at TIMESTAMPTZ NOT NULL,
-                left_at TIMESTAMPTZ,
-                duration_seconds INTEGER
+                slot_time TIMESTAMPTZ NOT NULL,
+                reminded BOOLEAN DEFAULT FALSE,
+                activated BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMPTZ DEFAULT NOW()
             );
 
-            CREATE INDEX IF NOT EXISTS idx_voice_sessions_open
-                ON voice_sessions (guild_id, channel_id, user_id)
-                WHERE left_at IS NULL;
+            CREATE INDEX IF NOT EXISTS idx_queue_bookings_pending
+                ON queue_bookings (guild_id, slot_time)
+                WHERE activated = FALSE;
+            """
+        )
 
-            CREATE INDEX IF NOT EXISTS idx_voice_sessions_lookup
-                ON voice_sessions (guild_id, channel_id, user_id, joined_at);
-
-            -- ตารางอเนกประสงค์สำรองไว้สำหรับข้อมูลอื่นๆ ในอนาคต
-            -- ใช้เก็บค่าแบบ key-value ต่อกิลด์ ไม่ต้อง migrate schema ใหม่ทุกครั้งที่เพิ่มฟีเจอร์เล็กๆ
-            -- ตัวอย่าง: key='settings', value='{"prefix": "!"}'
-            CREATE TABLE IF NOT EXISTS misc_data (
-                guild_id BIGINT NOT NULL,
-                key TEXT NOT NULL,
-                value JSONB,
-                updated_at TIMESTAMPTZ DEFAULT NOW(),
-                PRIMARY KEY (guild_id, key)
-            );
+        # Migration: เผื่อตาราง queue เดิมถูกสร้างไปแล้วก่อนที่จะมีคอลัมน์ called
+        # (CREATE TABLE IF NOT EXISTS จะไม่แก้ตารางที่มีอยู่แล้ว จึงต้อง ALTER แยก)
+        await conn.execute(
+            """
+            ALTER TABLE queue ADD COLUMN IF NOT EXISTS called BOOLEAN DEFAULT FALSE;
             """
         )
