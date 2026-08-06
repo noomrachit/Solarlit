@@ -3,14 +3,17 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 from dotenv import load_dotenv
 from aiohttp import web
 
 import database as db
+
+BANGKOK_TZ = ZoneInfo("Asia/Bangkok")
 
 load_dotenv()
 
@@ -140,6 +143,8 @@ async def on_ready():
         log.error(f"Sync failed: {e}")
     await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="SoLARLIT | /help"))
     asyncio.create_task(start_health_server())
+    if not check_bookings.is_running():
+        check_bookings.start()
 
 @bot.event
 async def on_member_join(member: discord.Member):
@@ -679,7 +684,81 @@ async def refresh_all_boards(guild: discord.Guild):
             pass
 
 
-class QueueFullBoardView(discord.ui.View):
+@tasks.loop(minutes=1)
+async def check_bookings():
+    """
+    รันทุก 1 นาที ตรวจสอบการจองคิวล่วงหน้า (queue_bookings):
+    1) ถ้าใกล้ถึงเวลาจอง (ภายใน 10 นาที) และยังไม่เคยเตือน -> ส่ง DM เตือน
+    2) ถ้าถึงเวลาจองแล้ว -> เพิ่มเข้าคิวจริงอัตโนมัติ + DM แจ้งว่าเข้าคิวแล้ว + อัปเดตกระดาน
+    """
+    try:
+        pool = await db.get_pool()
+    except Exception:
+        return
+
+    now = datetime.now(timezone.utc)
+    reminder_window = now + timedelta(minutes=10)
+
+    # 1) แจ้งเตือนล่วงหน้า
+    to_remind = await pool.fetch(
+        """
+        SELECT id, guild_id, user_id FROM queue_bookings
+        WHERE activated = FALSE AND reminded = FALSE AND slot_time <= $1 AND slot_time > $2
+        """,
+        reminder_window, now
+    )
+    for b in to_remind:
+        guild = bot.get_guild(b["guild_id"])
+        member = guild.get_member(b["user_id"]) if guild else None
+        if member:
+            try:
+                await member.send(f"⏰ อีกไม่เกิน 10 นาทีจะถึงคิวที่คุณจองไว้ใน **{guild.name}** เตรียมตัวได้เลยครับ")
+            except Exception:
+                pass  # ปิด DM ไว้ หรือส่งไม่สำเร็จ ไม่เป็นไร ข้ามไป
+        await pool.execute("UPDATE queue_bookings SET reminded = TRUE WHERE id = $1", b["id"])
+
+    # 2) ถึงเวลาจองแล้ว -> เพิ่มเข้าคิวจริง
+    due = await pool.fetch(
+        """
+        SELECT id, guild_id, user_id FROM queue_bookings
+        WHERE activated = FALSE AND slot_time <= $1
+        """,
+        now
+    )
+    for b in due:
+        guild = bot.get_guild(b["guild_id"])
+        if not guild:
+            await pool.execute("UPDATE queue_bookings SET activated = TRUE WHERE id = $1", b["id"])
+            continue
+
+        exists = await pool.fetchval(
+            "SELECT 1 FROM queue WHERE guild_id = $1 AND user_id = $2",
+            b["guild_id"], b["user_id"]
+        )
+        if not exists:
+            max_pos = await pool.fetchval(
+                "SELECT COALESCE(MAX(position), 0) FROM queue WHERE guild_id = $1", b["guild_id"]
+            ) or 0
+            await pool.execute(
+                "INSERT INTO queue (guild_id, user_id, position) VALUES ($1, $2, $3)",
+                b["guild_id"], b["user_id"], max_pos + 1
+            )
+
+        await pool.execute("UPDATE queue_bookings SET activated = TRUE WHERE id = $1", b["id"])
+
+        member = guild.get_member(b["user_id"])
+        if member:
+            try:
+                await member.send(f"✅ ถึงเวลาจองของคุณแล้ว! ระบบเพิ่มคุณเข้าคิวใน **{guild.name}** ให้อัตโนมัติแล้วครับ")
+            except Exception:
+                pass
+
+        await refresh_all_boards(guild)
+
+
+@check_bookings.before_loop
+async def before_check_bookings():
+    await bot.wait_until_ready()
     """
     กระดานคิวรวม 5 ปุ่มในข้อความเดียว:
     แถวบน (ทุกคนกดได้): เข้าคิว / ออกจากคิว
@@ -842,6 +921,77 @@ async def queue_leave(interaction: discord.Interaction):
 async def queue_list(interaction: discord.Interaction):
     embed = await build_queue_embed(interaction.guild)
     await interaction.response.send_message(embed=embed)
+
+@queue_group.command(name="book", description="จองคิวล่วงหน้า (ระบุวันและเวลาไทย)")
+@app_commands.describe(date="วันที่ รูปแบบ YYYY-MM-DD เช่น 2026-08-10", time="เวลา รูปแบบ HH:MM (24 ชม.) เช่น 14:30")
+async def queue_book(interaction: discord.Interaction, date: str, time: str):
+    try:
+        naive = datetime.strptime(f"{date} {time}", "%Y-%m-%d %H:%M")
+        slot_time = naive.replace(tzinfo=BANGKOK_TZ)
+    except ValueError:
+        return await interaction.response.send_message(
+            "❌ รูปแบบวันที่/เวลาไม่ถูกต้อง ใช้ `YYYY-MM-DD` และ `HH:MM` เช่น `2026-08-10` และ `14:30`",
+            ephemeral=True
+        )
+
+    now = datetime.now(BANGKOK_TZ)
+    if slot_time <= now:
+        return await interaction.response.send_message("❌ ต้องจองเวลาที่ยังไม่ถึงเท่านั้น", ephemeral=True)
+
+    pool = await db.get_pool()
+
+    # กันจอง 2 คิวซ้อนกัน: 1 คนมีได้แค่ 1 การจองที่ยังไม่ถึงเวลาต่อกิลด์
+    existing = await pool.fetchval(
+        "SELECT 1 FROM queue_bookings WHERE guild_id = $1 AND user_id = $2 AND activated = FALSE",
+        interaction.guild.id, interaction.user.id
+    )
+    if existing:
+        return await interaction.response.send_message(
+            "คุณมีการจองที่ยังไม่ถึงเวลาอยู่แล้ว ใช้ `/queue unbook` ก่อนถ้าต้องการจองใหม่",
+            ephemeral=True
+        )
+
+    await pool.execute(
+        "INSERT INTO queue_bookings (guild_id, user_id, slot_time) VALUES ($1, $2, $3)",
+        interaction.guild.id, interaction.user.id, slot_time.astimezone(timezone.utc)
+    )
+
+    thai_str = slot_time.strftime("%d/%m/%Y เวลา %H:%M น.")
+    await interaction.response.send_message(
+        f"📅 จองคิวเรียบร้อย: **{thai_str}** (เวลาไทย)\n"
+        f"ระบบจะ DM แจ้งเตือนล่วงหน้า 10 นาที และเพิ่มเข้าคิวให้อัตโนมัติเมื่อถึงเวลา (เปิดรับ DM จากสมาชิกเซิร์ฟเวอร์ไว้ด้วยนะครับ)",
+        ephemeral=True
+    )
+
+@queue_group.command(name="unbook", description="ยกเลิกการจองคิวล่วงหน้าของตัวเอง")
+async def queue_unbook(interaction: discord.Interaction):
+    pool = await db.get_pool()
+    result = await pool.execute(
+        "DELETE FROM queue_bookings WHERE guild_id = $1 AND user_id = $2 AND activated = FALSE",
+        interaction.guild.id, interaction.user.id
+    )
+    if result == "DELETE 0":
+        return await interaction.response.send_message("คุณไม่มีการจองที่รอดำเนินการอยู่", ephemeral=True)
+    await interaction.response.send_message("ยกเลิกการจองแล้ว", ephemeral=True)
+
+@queue_group.command(name="bookings", description="ดูรายการจองคิวล่วงหน้าที่รอดำเนินการ (แอดมิน)")
+@has_mod_perms()
+async def queue_bookings_cmd(interaction: discord.Interaction):
+    pool = await db.get_pool()
+    rows = await pool.fetch(
+        "SELECT user_id, slot_time FROM queue_bookings WHERE guild_id = $1 AND activated = FALSE ORDER BY slot_time ASC LIMIT 20",
+        interaction.guild.id
+    )
+    if not rows:
+        return await interaction.response.send_message("ยังไม่มีการจองคิวล่วงหน้า", ephemeral=True)
+    lines = []
+    for r in rows:
+        local_time = r["slot_time"].astimezone(BANGKOK_TZ)
+        member = interaction.guild.get_member(r["user_id"])
+        name = member.display_name if member else f"Unknown ({r['user_id']})"
+        lines.append(f"🗓️ {local_time.strftime('%d/%m %H:%M')} น. — {name}")
+    embed = discord.Embed(title="📅 รายการจองคิวล่วงหน้า", description="\n".join(lines), color=0x5865F2)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @queue_group.command(name="clear", description="ล้างคิวทั้งหมด (ไม่ลบกระดาน)")
 @has_mod_perms()
@@ -1184,7 +1334,7 @@ async def help_cmd(interaction: discord.Interaction):
     embed.add_field(name="/automod", value="toggle • anti_invite • anti_mention_spam • addword • removeword • listwords", inline=False)
     embed.add_field(name="/customcommand", value="add • remove • list • prefix", inline=False)
     embed.add_field(name="/reactionrole", value="add • remove", inline=False)
-    embed.add_field(name="/queue", value="join • leave • list • clear • board (กระดานรวมเข้า/ออก/เรียก/จบ/รีเฟรช)", inline=False)
+    embed.add_field(name="/queue", value="join • leave • list • book • unbook • bookings • clear • board", inline=False)
     embed.add_field(name="/voice", value="create • delete • limit • rename — จัดการห้องเสียง", inline=False)
     embed.add_field(name="/stage", value="create • delete • topic • rename — จัดการห้องกระจายเสียง", inline=False)
     embed.add_field(name="/supportpanel panel", value="โพสต์แผงช่วยเหลือ", inline=False)
@@ -1201,5 +1351,4 @@ async def main():
         await bot.start(TOKEN)
 
 if __name__ == "__main__":
-    asyncio.run(main())
     asyncio.run(main())
