@@ -128,4 +128,3 @@ async def init_db():
             ALTER TABLE queue ADD COLUMN IF NOT EXISTS called BOOLEAN DEFAULT FALSE;
             """
         )
-        )
