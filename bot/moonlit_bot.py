@@ -759,6 +759,9 @@ async def check_bookings():
 @check_bookings.before_loop
 async def before_check_bookings():
     await bot.wait_until_ready()
+
+
+class QueueFullBoardView(discord.ui.View):
     """
     กระดานคิวรวม 5 ปุ่มในข้อความเดียว:
     แถวบน (ทุกคนกดได้): เข้าคิว / ออกจากคิว
