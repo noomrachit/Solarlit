@@ -1,6 +1,8 @@
 import os
 import asyncio
 import logging
+import csv
+import io
 from datetime import datetime, timezone
 
 import discord
@@ -8,6 +10,11 @@ from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 from aiohttp import web
+
+import matplotlib
+matplotlib.use("Agg")  # ไม่ต้องใช้ GUI backend เพราะรันบนเซิร์ฟเวอร์
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 
 import database as db
 
@@ -351,6 +358,102 @@ async def voice_stats(interaction: discord.Interaction, channel: discord.VoiceCh
     await interaction.followup.send(embed=embed)
 
 
+@voice_group.command(name="export", description="ส่งออกข้อมูลการเข้าห้องเป็นไฟล์ CSV (เปิดด้วย Excel ได้)")
+@app_commands.describe(channel="ห้องเสียง", days="ย้อนหลังกี่วัน (ค่าเริ่มต้น 30 วัน, ใส่ 0 = ทั้งหมด)")
+async def voice_export(interaction: discord.Interaction, channel: discord.VoiceChannel, days: app_commands.Range[int, 0, 365] = 30):
+    await interaction.response.defer(ephemeral=True)
+    pool = await db.get_pool()
+
+    if days > 0:
+        query = """
+            SELECT user_id, joined_at, left_at,
+                   COALESCE(duration_seconds, EXTRACT(EPOCH FROM (NOW() - joined_at))::INT) AS duration_seconds
+            FROM voice_sessions
+            WHERE guild_id = $1 AND channel_id = $2 AND joined_at >= NOW() - ($3 || ' days')::interval
+            ORDER BY joined_at ASC
+        """
+        rows = await pool.fetch(query, interaction.guild.id, channel.id, str(days))
+    else:
+        query = """
+            SELECT user_id, joined_at, left_at,
+                   COALESCE(duration_seconds, EXTRACT(EPOCH FROM (NOW() - joined_at))::INT) AS duration_seconds
+            FROM voice_sessions
+            WHERE guild_id = $1 AND channel_id = $2
+            ORDER BY joined_at ASC
+        """
+        rows = await pool.fetch(query, interaction.guild.id, channel.id)
+
+    if not rows:
+        return await interaction.followup.send(f"ยังไม่มีข้อมูลของห้อง {channel.mention}", ephemeral=True)
+
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(["ชื่อผู้ใช้", "user_id", "เวลาเข้า (UTC)", "เวลาออก (UTC)", "ระยะเวลา (นาที)"])
+    for r in rows:
+        member = interaction.guild.get_member(r["user_id"])
+        name = member.display_name if member else f"Unknown"
+        left_text = r["left_at"].strftime("%Y-%m-%d %H:%M:%S") if r["left_at"] else "ยังอยู่ในห้อง"
+        writer.writerow([
+            name,
+            r["user_id"],
+            r["joined_at"].strftime("%Y-%m-%d %H:%M:%S"),
+            left_text,
+            round((r["duration_seconds"] or 0) / 60, 1),
+        ])
+
+    # ใส่ BOM (utf-8-sig) เพื่อให้ Excel เปิดแล้วอ่านภาษาไทยได้ถูกต้อง ไม่ขึ้นตัวอักษรมั่ว
+    data = buffer.getvalue().encode("utf-8-sig")
+    file = discord.File(io.BytesIO(data), filename=f"voice_{channel.name}_{datetime.now(timezone.utc).strftime('%Y%m%d')}.csv")
+    await interaction.followup.send(
+        content=f"📄 ข้อมูลห้อง {channel.mention} ({len(rows)} session)",
+        file=file,
+        ephemeral=True
+    )
+
+
+@voice_group.command(name="graph", description="ดูกราฟกิจกรรม (เวลารวมต่อวัน) ของห้องเสียง")
+@app_commands.describe(channel="ห้องเสียง", days="ย้อนหลังกี่วัน (ค่าเริ่มต้น 14 วัน)")
+async def voice_graph(interaction: discord.Interaction, channel: discord.VoiceChannel, days: app_commands.Range[int, 1, 90] = 14):
+    await interaction.response.defer()
+    pool = await db.get_pool()
+
+    query = """
+        SELECT date_trunc('day', joined_at) AS day,
+               SUM(COALESCE(duration_seconds, EXTRACT(EPOCH FROM (NOW() - joined_at))::INT)) / 60.0 AS total_minutes
+        FROM voice_sessions
+        WHERE guild_id = $1 AND channel_id = $2 AND joined_at >= NOW() - ($3 || ' days')::interval
+        GROUP BY day
+        ORDER BY day ASC
+    """
+    rows = await pool.fetch(query, interaction.guild.id, channel.id, str(days))
+
+    if not rows:
+        return await interaction.followup.send(f"ยังไม่มีข้อมูลของห้อง {channel.mention} ในช่วง {days} วันนี้")
+
+    dates = [r["day"] for r in rows]
+    minutes = [float(r["total_minutes"] or 0) for r in rows]
+
+    fig, ax = plt.subplots(figsize=(8, 4.5))
+    ax.plot(dates, minutes, marker="o", color="#5865F2", linewidth=2)
+    ax.fill_between(dates, minutes, alpha=0.15, color="#5865F2")
+    ax.set_title(f"กิจกรรมห้อง {channel.name} (ย้อนหลัง {days} วัน)")
+    ax.set_ylabel("นาทีรวมต่อวัน")
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%d/%m"))
+    fig.autofmt_xdate()
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+
+    img_buffer = io.BytesIO()
+    fig.savefig(img_buffer, format="png", dpi=120)
+    plt.close(fig)
+    img_buffer.seek(0)
+
+    file = discord.File(img_buffer, filename="voice_graph.png")
+    embed = discord.Embed(title=f"📈 กราฟกิจกรรม {channel.name}", color=0x5865F2)
+    embed.set_image(url="attachment://voice_graph.png")
+    await interaction.followup.send(embed=embed, file=file)
+
+
 tree.add_command(voice_group)
 
 
@@ -372,6 +475,8 @@ async def help_cmd(interaction: discord.Interaction):
     embed.add_field(name="/track list", value="ดูรายการห้องที่ติดตามอยู่", inline=False)
     embed.add_field(name="/voice now", value="ดูว่าใครอยู่ในห้องตอนนี้ + เวลาที่อยู่มา", inline=False)
     embed.add_field(name="/voice stats", value="สรุปเวลารวมของแต่ละคนในห้อง (เลือกช่วงวันได้)", inline=False)
+    embed.add_field(name="/voice export", value="ส่งออกข้อมูลเป็นไฟล์ CSV (เปิดด้วย Excel ได้)", inline=False)
+    embed.add_field(name="/voice graph", value="ดูกราฟกิจกรรม (เวลารวมต่อวัน) แบบรูปภาพ", inline=False)
     embed.add_field(name="/ping", value="ตรวจสอบสถานะบอท", inline=False)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
