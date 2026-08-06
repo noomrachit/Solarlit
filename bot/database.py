@@ -1,4 +1,3 @@
-
 import asyncpg
 import os
 from typing import Optional
@@ -118,6 +117,20 @@ async def init_db():
                 message_id BIGINT NOT NULL,
                 PRIMARY KEY (guild_id, channel_id)
             );
+
+            CREATE TABLE IF NOT EXISTS queue_bookings (
+                id SERIAL PRIMARY KEY,
+                guild_id BIGINT NOT NULL,
+                user_id BIGINT NOT NULL,
+                slot_time TIMESTAMPTZ NOT NULL,
+                reminded BOOLEAN DEFAULT FALSE,
+                activated BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_queue_bookings_pending
+                ON queue_bookings (guild_id, slot_time)
+                WHERE activated = FALSE;
             """
         )
 
