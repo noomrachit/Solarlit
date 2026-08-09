@@ -1,6 +1,7 @@
 import os
 import asyncio
 import logging
+import random
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -1187,6 +1188,282 @@ async def voice_rename(interaction: discord.Interaction, channel: discord.VoiceC
 
 tree.add_command(voice_group)
 
+# ─── Breakout Rooms ──────────────────────────────────────────────────────────
+
+breakout_group = app_commands.Group(name="breakout", description="แยกห้องเสียงเป็นห้องย่อย (breakout rooms)")
+
+@breakout_group.command(name="start", description="แยกคนในห้องเสียงออกเป็นห้องย่อยหลายห้องอัตโนมัติ")
+@has_mod_perms()
+@app_commands.describe(source="ห้องเสียงหลักที่จะแยกคนออก", rooms="จำนวนห้องย่อยที่ต้องการ (2-10)")
+async def breakout_start(interaction: discord.Interaction, source: discord.VoiceChannel, rooms: app_commands.Range[int, 2, 10]):
+    pool = await db.get_pool()
+
+    existing = await pool.fetchrow(
+        "SELECT source_channel_id FROM breakout_sessions WHERE guild_id = $1",
+        interaction.guild.id
+    )
+    if existing:
+        return await interaction.response.send_message(
+            "⚠️ มี breakout session ที่ยังไม่จบอยู่แล้ว ใช้ `/breakout recall` ก่อนเริ่มใหม่",
+            ephemeral=True
+        )
+
+    members = [m for m in source.members if not m.bot]
+    if not members:
+        return await interaction.response.send_message(f"ไม่มีคนอยู่ในห้อง {source.mention}", ephemeral=True)
+
+    await interaction.response.defer()
+
+    random.shuffle(members)
+    groups = [members[i::rooms] for i in range(rooms)]
+
+    created_channels = []
+    try:
+        for i in range(rooms):
+            ch = await interaction.guild.create_voice_channel(
+                name=f"{source.name} - กลุ่ม {i + 1}",
+                category=source.category,
+                reason=f"Breakout room สร้างโดย {interaction.user}"
+            )
+            created_channels.append(ch)
+    except discord.Forbidden:
+        for ch in created_channels:
+            try:
+                await ch.delete()
+            except Exception:
+                pass
+        return await interaction.followup.send("❌ บอทไม่มีสิทธิ์สร้างห้องเสียง (ต้องการ Manage Channels)")
+
+    moved_summary = []
+    owner_ids = []
+    for i, group in enumerate(groups):
+        moved_names = []
+        for member in group:
+            try:
+                await member.move_to(created_channels[i], reason="Breakout room")
+                moved_names.append(member.display_name)
+            except Exception:
+                pass  # ย้ายไม่สำเร็จ (เช่นออกจากห้องไปแล้ว) ข้ามไป
+
+        owner = group[0] if group else None
+        owner_ids.append(owner.id if owner else 0)
+        owner_tag = f" 👑 หัวหน้าห้อง: {owner.display_name}" if owner else ""
+        moved_summary.append(
+            f"**{created_channels[i].mention}**: {', '.join(moved_names) if moved_names else '(ว่าง)'}{owner_tag}"
+        )
+
+    await pool.execute(
+        """
+        INSERT INTO breakout_sessions (guild_id, source_channel_id, room_channel_ids, owner_ids)
+        VALUES ($1, $2, $3, $4)
+        """,
+        interaction.guild.id, source.id, [ch.id for ch in created_channels], owner_ids
+    )
+
+    embed = discord.Embed(
+        title="🔀 แยกห้องย่อยเรียบร้อย",
+        description="\n".join(moved_summary),
+        color=0x57F287
+    )
+    embed.set_footer(text="👑 หัวหน้าห้องจะได้สิทธิ์พูดในห้องใหญ่อัตโนมัติตอน /breakout recall • เปลี่ยนหัวหน้าได้ด้วย /breakout setowner")
+    await interaction.followup.send(embed=embed)
+
+
+@breakout_group.command(name="recall", description="ดึงทุกคนกลับห้องหลัก และลบห้องย่อยทิ้ง")
+@has_mod_perms()
+async def breakout_recall(interaction: discord.Interaction):
+    pool = await db.get_pool()
+    session = await pool.fetchrow(
+        "SELECT source_channel_id, room_channel_ids, owner_ids FROM breakout_sessions WHERE guild_id = $1",
+        interaction.guild.id
+    )
+    if not session:
+        return await interaction.response.send_message("ไม่มี breakout session ที่กำลังทำงานอยู่", ephemeral=True)
+
+    await interaction.response.defer()
+
+    source_channel = interaction.guild.get_channel(session["source_channel_id"])
+    room_ids = session["room_channel_ids"]
+    owner_ids = list(session["owner_ids"] or [])
+    moved_count = 0
+    speak_granted = []
+
+    for idx, room_id in enumerate(room_ids):
+        room = interaction.guild.get_channel(room_id)
+        if not room:
+            continue
+        for member in list(room.members):
+            if source_channel:
+                try:
+                    await member.move_to(source_channel, reason="Breakout recall")
+                    moved_count += 1
+                except Exception:
+                    pass
+        try:
+            await room.delete(reason="Breakout session สิ้นสุด")
+        except Exception:
+            pass
+
+    # มอบสิทธิ์พูดคืนให้หัวหน้าห้องแต่ละห้อง ในห้องใหญ่ (เผื่อห้องใหญ่ถูกตั้งเป็นฟังอย่างเดียวไว้)
+    if source_channel:
+        for idx in range(len(room_ids)):
+            owner_id = owner_ids[idx] if idx < len(owner_ids) else 0
+            if not owner_id:
+                continue
+            owner_member = interaction.guild.get_member(owner_id)
+            if not owner_member:
+                continue
+            try:
+                overwrite = source_channel.overwrites_for(owner_member)
+                overwrite.connect = True
+                overwrite.speak = True
+                await source_channel.set_permissions(
+                    owner_member, overwrite=overwrite,
+                    reason="Breakout owner ได้สิทธิ์พูดกลับห้องใหญ่"
+                )
+                speak_granted.append(owner_member.display_name)
+            except Exception:
+                pass
+
+    await pool.execute("DELETE FROM breakout_sessions WHERE guild_id = $1", interaction.guild.id)
+
+    if source_channel:
+        msg = f"✅ ดึงกลับแล้ว {moved_count} คน มายัง {source_channel.mention} และลบห้องย่อยทิ้งหมดแล้ว"
+        if speak_granted:
+            msg += f"\n🎙️ ให้สิทธิ์พูดในห้องใหญ่แก่หัวหน้าห้อง: {', '.join(speak_granted)}"
+        await interaction.followup.send(msg)
+    else:
+        await interaction.followup.send("✅ ลบห้องย่อยทิ้งหมดแล้ว (ห้องหลักเดิมถูกลบไปแล้ว จึงย้ายคนกลับไม่ได้)")
+
+
+@breakout_group.command(name="move", description="ย้ายสมาชิกคนใดคนหนึ่งไปห้องย่อยที่ระบุ (หรือห้องเสียงใดก็ได้)")
+@has_mod_perms()
+@app_commands.describe(
+    member="สมาชิกที่ต้องการย้าย",
+    room="หมายเลขห้องย่อย (1, 2, 3, ...) จาก breakout session ที่กำลังทำงานอยู่",
+    channel="หรือระบุห้องเสียงปลายทางตรงๆ (ใช้แทน room ก็ได้ถ้าไม่ได้ใช้ breakout session)"
+)
+async def breakout_move(
+    interaction: discord.Interaction,
+    member: discord.Member,
+    room: Optional[int] = None,
+    channel: Optional[discord.VoiceChannel] = None
+):
+    if room is None and channel is None:
+        return await interaction.response.send_message("❌ ต้องระบุ `room` หรือ `channel` อย่างใดอย่างหนึ่ง", ephemeral=True)
+
+    target_channel = channel
+    if room is not None:
+        pool = await db.get_pool()
+        session = await pool.fetchrow(
+            "SELECT room_channel_ids FROM breakout_sessions WHERE guild_id = $1",
+            interaction.guild.id
+        )
+        if not session:
+            return await interaction.response.send_message(
+                "❌ ไม่มี breakout session ที่กำลังทำงานอยู่ ใช้ `/breakout start` ก่อน หรือระบุ `channel` แทน",
+                ephemeral=True
+            )
+        room_ids = session["room_channel_ids"]
+        if room < 1 or room > len(room_ids):
+            return await interaction.response.send_message(f"❌ ห้องย่อยมีแค่หมายเลข 1-{len(room_ids)}", ephemeral=True)
+        target_channel = interaction.guild.get_channel(room_ids[room - 1])
+        if not target_channel:
+            return await interaction.response.send_message("❌ ห้องย่อยนี้ถูกลบไปแล้ว", ephemeral=True)
+
+    if member.voice is None or member.voice.channel is None:
+        return await interaction.response.send_message(f"❌ {member.mention} ไม่ได้อยู่ในห้องเสียงใดเลย ย้ายไม่ได้", ephemeral=True)
+
+    try:
+        await member.move_to(target_channel, reason=f"Breakout manual move by {interaction.user}")
+    except discord.Forbidden:
+        return await interaction.response.send_message("❌ บอทไม่มีสิทธิ์ย้ายสมาชิก", ephemeral=True)
+    except Exception as e:
+        return await interaction.response.send_message(f"❌ ล้มเหลว: {e}", ephemeral=True)
+
+    await interaction.response.send_message(f"✅ ย้าย {member.mention} ไป {target_channel.mention} แล้ว", ephemeral=True)
+
+
+@breakout_group.command(name="setowner", description="กำหนด/เปลี่ยนหัวหน้าห้องย่อย (จะได้สิทธิ์พูดกลับห้องใหญ่ตอน recall)")
+@has_mod_perms()
+@app_commands.describe(member="สมาชิกที่จะตั้งเป็นหัวหน้าห้อง", room="หมายเลขห้องย่อย")
+async def breakout_setowner(interaction: discord.Interaction, member: discord.Member, room: int):
+    pool = await db.get_pool()
+    session = await pool.fetchrow(
+        "SELECT room_channel_ids, owner_ids FROM breakout_sessions WHERE guild_id = $1",
+        interaction.guild.id
+    )
+    if not session:
+        return await interaction.response.send_message("❌ ไม่มี breakout session ที่กำลังทำงานอยู่", ephemeral=True)
+
+    room_ids = session["room_channel_ids"]
+    if room < 1 or room > len(room_ids):
+        return await interaction.response.send_message(f"❌ ห้องย่อยมีแค่หมายเลข 1-{len(room_ids)}", ephemeral=True)
+
+    owners = list(session["owner_ids"] or [])
+    while len(owners) < len(room_ids):
+        owners.append(0)
+    owners[room - 1] = member.id
+
+    await pool.execute(
+        "UPDATE breakout_sessions SET owner_ids = $1 WHERE guild_id = $2",
+        owners, interaction.guild.id
+    )
+    await interaction.response.send_message(f"👑 ตั้ง {member.mention} เป็นหัวหน้าห้องย่อยหมายเลข {room} แล้ว", ephemeral=True)
+
+
+@breakout_group.command(name="setspeakers", description="ตั้งค่าห้อง: เฉพาะบทบาทที่ระบุพูดได้ คนอื่นเข้าฟังอย่างเดียว")
+@has_mod_perms()
+@app_commands.describe(channel="ห้องเสียงที่ต้องการตั้งค่า (เช่นห้องประชุมใหญ่)", role="บทบาทที่อนุญาตให้พูดได้")
+async def breakout_setspeakers(interaction: discord.Interaction, channel: discord.VoiceChannel, role: discord.Role):
+    try:
+        everyone_ow = channel.overwrites_for(interaction.guild.default_role)
+        everyone_ow.connect = True
+        everyone_ow.speak = False
+        await channel.set_permissions(
+            interaction.guild.default_role, overwrite=everyone_ow,
+            reason=f"ตั้งสิทธิ์พูดตามบทบาทโดย {interaction.user}"
+        )
+
+        role_ow = channel.overwrites_for(role)
+        role_ow.connect = True
+        role_ow.speak = True
+        await channel.set_permissions(
+            role, overwrite=role_ow,
+            reason=f"ตั้งสิทธิ์พูดตามบทบาทโดย {interaction.user}"
+        )
+    except discord.Forbidden:
+        return await interaction.response.send_message(
+            "❌ บอทไม่มีสิทธิ์แก้ไข permission ห้องนี้ (ต้องการ Manage Roles/Manage Channels)",
+            ephemeral=True
+        )
+
+    await interaction.response.send_message(
+        f"🔇 ตั้งค่า {channel.mention} แล้ว: เฉพาะ {role.mention} พูดได้ คนอื่นเข้าฟังได้อย่างเดียว",
+        ephemeral=True
+    )
+
+
+@breakout_group.command(name="unsetspeakers", description="ยกเลิกการจำกัดสิทธิ์พูดของห้อง คืนค่า @everyone เป็นปกติ")
+@has_mod_perms()
+@app_commands.describe(channel="ห้องเสียงที่ต้องการยกเลิกการจำกัด")
+async def breakout_unsetspeakers(interaction: discord.Interaction, channel: discord.VoiceChannel):
+    try:
+        await channel.set_permissions(
+            interaction.guild.default_role, overwrite=None,
+            reason=f"ยกเลิกจำกัดสิทธิ์พูดโดย {interaction.user}"
+        )
+    except discord.Forbidden:
+        return await interaction.response.send_message("❌ บอทไม่มีสิทธิ์แก้ไข permission ห้องนี้", ephemeral=True)
+
+    await interaction.response.send_message(
+        f"🔊 ยกเลิกการจำกัดสิทธิ์พูดของ {channel.mention} แล้ว (บทบาทที่เคยได้รับสิทธิ์พูดเฉพาะยังคงอยู่ ลบเองผ่าน Discord ได้ถ้าไม่ต้องการแล้ว)",
+        ephemeral=True
+    )
+
+
+tree.add_command(breakout_group)
+
 # Stage Channels
 stage_group = app_commands.Group(name="stage", description="จัดการ Stage Channel (ห้องกระจายเสียง)")
 
@@ -1339,6 +1616,7 @@ async def help_cmd(interaction: discord.Interaction):
     embed.add_field(name="/reactionrole", value="add • remove", inline=False)
     embed.add_field(name="/queue", value="join • leave • list • book • unbook • bookings • clear • board", inline=False)
     embed.add_field(name="/voice", value="create • delete • limit • rename — จัดการห้องเสียง", inline=False)
+    embed.add_field(name="/breakout", value="start • move • recall • setowner • setspeakers • unsetspeakers", inline=False)
     embed.add_field(name="/stage", value="create • delete • topic • rename — จัดการห้องกระจายเสียง", inline=False)
     embed.add_field(name="/supportpanel panel", value="โพสต์แผงช่วยเหลือ", inline=False)
     embed.add_field(name="/settings logchannel", value="ตั้งช่อง log", inline=False)
