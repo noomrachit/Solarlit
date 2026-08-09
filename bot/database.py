@@ -131,6 +131,21 @@ async def init_db():
             CREATE INDEX IF NOT EXISTS idx_queue_bookings_pending
                 ON queue_bookings (guild_id, slot_time)
                 WHERE activated = FALSE;
+
+            CREATE TABLE IF NOT EXISTS breakout_sessions (
+                guild_id BIGINT PRIMARY KEY,
+                source_channel_id BIGINT NOT NULL,
+                room_channel_ids BIGINT[] NOT NULL,
+                owner_ids BIGINT[] DEFAULT '{}',
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            );
+            """
+        )
+
+        # Migration: เผื่อตาราง breakout_sessions ถูกสร้างไปแล้วก่อนมีคอลัมน์ owner_ids
+        await conn.execute(
+            """
+            ALTER TABLE breakout_sessions ADD COLUMN IF NOT EXISTS owner_ids BIGINT[] DEFAULT '{}';
             """
         )
 
