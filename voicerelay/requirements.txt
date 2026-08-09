@@ -1,0 +1,5 @@
+discord.py>=2.4.0
+discord-ext-voice-recv
+PyNaCl>=1.5.0
+python-dotenv>=1.0.0
+aiohttp>=3.9.0
