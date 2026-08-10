@@ -28,6 +28,7 @@ import logging
 import struct
 from collections import defaultdict
 from contextlib import AsyncExitStack
+from typing import Union
 
 import numpy as np
 
@@ -267,7 +268,7 @@ listener_binding: dict = {"owner_id": None, "channel_id": None}
 speaker_bindings: dict = {}  # index -> {"owner_id":..., "channel_id":...}
 
 
-async def start_listening(channel: discord.VoiceChannel):
+async def start_listening(channel: Union[discord.VoiceChannel, discord.StageChannel]):
     """เริ่มให้บอทฟังเข้าห้องหลักและดักจับเสียง (ใช้ได้ทั้งเรียกเองผ่านคำสั่ง และเรียกอัตโนมัติ)"""
     global relay_active
     if relay_active:
@@ -334,8 +335,8 @@ relay_group = app_commands.Group(name="relay", description="ถ่ายทอ�
 
 @relay_group.command(name="start", description="เริ่มฟังเสียงจากห้องหลัก (ยังไม่กระจายไปไหนจนกว่าจะ /relay addtarget)")
 @has_relay_perms()
-@app_commands.describe(source="ห้องหลัก (จุดที่จะดักเสียง)")
-async def relay_start(interaction: discord.Interaction, source: discord.VoiceChannel):
+@app_commands.describe(source="ห้องหลัก (Voice หรือ Stage Channel — แนะนำ Stage Channel เพราะไม่ติดปัญหาเข้ารหัส DAVE)")
+async def relay_start(interaction: discord.Interaction, source: Union[discord.VoiceChannel, discord.StageChannel]):
     await interaction.response.defer(ephemeral=True)
 
     if relay_active:
@@ -426,8 +427,8 @@ async def relay_stop(interaction: discord.Interaction):
 
 @relay_group.command(name="bindlistener", description="ผูกบอทฟังให้เข้า/ออกห้องหลักอัตโนมัติตามเจ้าของห้อง")
 @has_relay_perms()
-@app_commands.describe(owner="เจ้าของห้อง (บอทจะเข้า/ออกตามคนนี้เข้า-ออกห้อง)", channel="ห้องหลักที่จะผูกไว้")
-async def relay_bindlistener(interaction: discord.Interaction, owner: discord.Member, channel: discord.VoiceChannel):
+@app_commands.describe(owner="เจ้าของห้อง (บอทจะเข้า/ออกตามคนนี้เข้า-ออกห้อง)", channel="ห้องหลักที่จะผูกไว้ (Voice หรือ Stage Channel)")
+async def relay_bindlistener(interaction: discord.Interaction, owner: discord.Member, channel: Union[discord.VoiceChannel, discord.StageChannel]):
     listener_binding["owner_id"] = owner.id
     listener_binding["channel_id"] = channel.id
     await interaction.response.send_message(
@@ -610,4 +611,5 @@ async def main():
 
 
 if __name__ == "__main__":
+    asyncio.run(main())
     asyncio.run(main())
