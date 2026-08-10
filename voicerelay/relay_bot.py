@@ -59,6 +59,63 @@ if not SPEAKER_TOKENS:
 
 log.info(f"พบบอทพูดทั้งหมด {len(SPEAKER_TOKENS)} ตัว (รองรับห้องฟังพร้อมกันได้สูงสุด {len(SPEAKER_TOKENS)} ห้อง)")
 
+
+def _patch_voice_recv_resilience():
+    """
+    แพตช์ไลบรารี discord-ext-voice-recv ให้ทนต่อ error 'corrupted stream' จาก opus decode
+    ปกติเกิดเวลามีคนพูดพร้อมกันหลายคน/แพ็กเก็ตขาดหาย/decoder เพิ่งถูกสร้างสำหรับคนพูดใหม่
+    ถ้าไม่แพตช์ error ตัวเดียวจะทำให้ thread รับเสียงทั้งหมดตาย ฟังเสียงต่อไม่ได้เลยทั้ง session
+    หลังแพตช์: ข้าม packet ที่ decode ไม่ได้ทิ้งไปเฉยๆ (เสียงสะดุดแป๊บเดียว) แทนที่จะล่มทั้งระบบ
+    """
+    try:
+        from discord.ext.voice_recv import opus as vr_opus
+    except Exception as e:
+        log.warning(f"ไม่พบโมดูล voice_recv.opus สำหรับแพตช์ (ข้ามได้ ไม่ critical): {e}")
+        vr_opus = None
+
+    if vr_opus is not None:
+        decoder_cls = getattr(vr_opus, "PacketDecoder", None)
+        if decoder_cls is not None and hasattr(decoder_cls, "_process_packet"):
+            original_process = decoder_cls._process_packet
+
+            def _safe_process_packet(self, packet, *args, **kwargs):
+                try:
+                    return original_process(self, packet, *args, **kwargs)
+                except Exception as e:
+                    log.warning(f"ข้าม packet เสียงที่ decode ไม่ได้ (ไม่ล่มทั้งระบบ): {e}")
+                    return None
+
+            decoder_cls._process_packet = _safe_process_packet
+            log.info("แพตช์ PacketDecoder._process_packet สำเร็จ")
+        else:
+            log.warning("ไม่พบ PacketDecoder._process_packet สำหรับแพตช์ (โครงสร้างไลบรารีอาจเปลี่ยน)")
+
+    try:
+        from discord.ext.voice_recv import router as vr_router
+    except Exception as e:
+        log.warning(f"ไม่พบโมดูล voice_recv.router สำหรับแพตช์ (ข้ามได้ ไม่ critical): {e}")
+        vr_router = None
+
+    if vr_router is not None:
+        router_cls = getattr(vr_router, "PacketRouter", None)
+        if router_cls is not None and hasattr(router_cls, "_do_run"):
+            original_do_run = router_cls._do_run
+
+            def _safe_do_run(self, *args, **kwargs):
+                try:
+                    return original_do_run(self, *args, **kwargs)
+                except Exception as e:
+                    log.warning(f"ข้าม error ใน packet router loop (ไม่ล่มทั้ง thread): {e}")
+                    return None
+
+            router_cls._do_run = _safe_do_run
+            log.info("แพตช์ PacketRouter._do_run สำเร็จ")
+        else:
+            log.warning("ไม่พบ PacketRouter._do_run สำหรับแพตช์ (โครงสร้างไลบรารีอาจเปลี่ยน)")
+
+
+_patch_voice_recv_resilience()
+
 FRAME_BYTES = 3840  # เฟรมเสียง 20ms ที่ 48kHz, 16-bit, stereo (มาตรฐานของ Discord voice)
 
 relay_active = False
