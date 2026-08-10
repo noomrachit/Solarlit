@@ -29,6 +29,8 @@ import struct
 from collections import defaultdict
 from contextlib import AsyncExitStack
 
+import numpy as np
+
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -159,16 +161,16 @@ class Mixer:
             if len(buf) >= FRAME_BYTES:
                 chunk = bytes(buf[:FRAME_BYTES])
                 del buf[:FRAME_BYTES]
-                samples = struct.unpack(f"<{len(chunk) // 2}h", chunk)
-                if mixed is None:
-                    mixed = list(samples)
-                else:
-                    mixed = [max(-32768, min(32767, a + b)) for a, b in zip(mixed, samples)]
+                # ใช้ numpy แทน struct/list loop เดิม เร็วกว่ามาก ลดโอกาสจังหวะเฟรมเพี้ยนจน CPU ตามไม่ทัน
+                samples = np.frombuffer(chunk, dtype=np.int16).astype(np.int32)
+                mixed = samples if mixed is None else mixed + samples
             if len(buf) == 0:
                 del self.buffers[uid]
         if mixed is None:
             return b"\x00" * FRAME_BYTES
-        return struct.pack(f"<{len(mixed)}h", *mixed)
+        # clip กันเสียงล้น (hard clipping) ตอนมีคนพูดพร้อมกันหลายคนเสียงดังรวมกัน
+        mixed = np.clip(mixed, -32768, 32767).astype(np.int16)
+        return mixed.tobytes()
 
 
 mixer = Mixer()
@@ -206,9 +208,25 @@ class QueueAudioSource(discord.AudioSource):
 
 
 async def mixer_pump():
-    """วน mix เฟรมทุก 20ms แล้วกระจาย (broadcast) เข้า queue ของทุกบอทพูดที่กำลังทำงานอยู่"""
+    """
+    วน mix เฟรมทุก 20ms แล้วกระจาย (broadcast) เข้า queue ของทุกบอทพูดที่กำลังทำงานอยู่
+    ใช้ timer แบบอิงเวลาสัมบูรณ์ (next_tick) แทนการ sleep(0.02) ตรงๆ
+    เพราะการ sleep ตรงๆ จะสะสมความคลาดเคลื่อน (drift) ไปเรื่อยๆ เมื่อมี jitter จาก CPU/GC
+    ทำให้จังหวะเฟรมเสียงค่อยๆ เพี้ยนไปจนได้ยินเป็นเสียงแตก/สะดุด
+    """
+    loop = asyncio.get_running_loop()
+    FRAME_INTERVAL = 0.02
+    next_tick = loop.time()
+
     while True:
-        await asyncio.sleep(0.02)
+        next_tick += FRAME_INTERVAL
+        delay = next_tick - loop.time()
+        if delay > 0:
+            await asyncio.sleep(delay)
+        else:
+            # ตกจังหวะไปมาก (เช่นเครื่องช้าตอนนั้น) รีเซ็ต baseline กันสะสม drift ยาวๆ ต่อเนื่อง
+            next_tick = loop.time()
+
         if not relay_active or not active_speaker_indices:
             continue
         frame = mixer.pop_frame()
