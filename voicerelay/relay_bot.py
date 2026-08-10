@@ -171,7 +171,11 @@ def has_relay_perms():
     async def predicate(interaction: discord.Interaction) -> bool:
         if not interaction.guild:
             return False
-        member = interaction.guild.get_member(interaction.user.id)
+        # interaction.user ที่ Discord ส่งมาตอนกดคำสั่งในเซิร์ฟเวอร์ เป็น Member ที่มีสิทธิ์ครบอยู่แล้ว
+        # ไม่ต้องพึ่ง guild.get_member() ซึ่งต้องมี Members Intent + cache ถึงจะเจอ
+        member = interaction.user
+        if not isinstance(member, discord.Member):
+            member = interaction.guild.get_member(interaction.user.id)
         if member is None:
             return False
         perms = member.guild_permissions
@@ -531,5 +535,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
     asyncio.run(main())
