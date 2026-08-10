@@ -420,6 +420,22 @@ async def relay_status(interaction: discord.Interaction):
 tree.add_command(relay_group)
 
 
+@tree.error
+async def on_relay_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    if isinstance(error, app_commands.CheckFailure):
+        msg = "❌ คุณไม่มีสิทธิ์ใช้คำสั่งนี้ (ต้องมีสิทธิ์ **Manage Channels** หรือ **Administrator** ในเซิร์ฟเวอร์นี้)"
+    else:
+        log.exception(f"Unhandled command error: {error}")
+        msg = f"❌ เกิดข้อผิดพลาด: {error}"
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(msg, ephemeral=True)
+        else:
+            await interaction.response.send_message(msg, ephemeral=True)
+    except Exception:
+        pass
+
+
 # Health check
 async def health_handler(request):
     return web.Response(text="OK", status=200)
