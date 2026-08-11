@@ -1622,6 +1622,96 @@ async def help_cmd(interaction: discord.Interaction):
     embed.add_field(name="/settings logchannel", value="ตั้งช่อง log", inline=False)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
+
+# ─────────────────────────────────────────────
+# /dashboard — กระดานรวมบอททั้งหมดในเซิร์ฟเวอร์ พร้อมรูปและคำสั่งของแต่ละตัว
+# ─────────────────────────────────────────────
+
+BOT_DASHBOARD = [
+    {
+        "name_match": "ใจปู",
+        "title": "🎫 ใจปู — ระบบคิว, Moderation, Breakout Rooms",
+        "color": 0x5865F2,
+        "commands": [
+            "/queue — join, leave, list, book, unbook, bookings, clear, board",
+            "/breakout — start, move, recall, setowner, setspeakers, unsetspeakers",
+            "/voice — create, delete, limit, rename",
+            "/mod — kick, ban, timeout, warn, warnings, clear",
+            "/welcome, /automod, /customcommand, /reactionrole",
+            "/stage, /supportpanel, /settings, /invite, /ping, /help",
+        ],
+    },
+    {
+        "name_match": "ยาม",
+        "title": "🎙️ ยาม — ติดตามห้องเสียง",
+        "color": 0x57F287,
+        "commands": [
+            "/track — add, remove, list",
+            "/voice — now, stats, export, graph",
+            "/ping, /help",
+        ],
+    },
+    {
+        "name_match": "หัวหน้า",
+        "title": "🎧 หัวหน้า — Voice Relay (บอทฟัง)",
+        "color": 0xFEE75C,
+        "commands": [
+            "/relay — start, addtarget, removetarget, stop, status",
+            "/relay — bindlistener, bindspeaker, unbind",
+        ],
+    },
+]
+
+SPEAKER_BOT_NAMES = ["ลูกน้อง", "ลูกน้อง 1", "ลูกน้อง 2", "ลูกน้อง 3", "ลูกน้อง 4"]
+
+
+@tree.command(name="dashboard", description="แสดงกระดานรวมบอททั้งหมดในเซิร์ฟเวอร์ พร้อมรูปและคำสั่งของแต่ละตัว")
+async def dashboard_cmd(interaction: discord.Interaction):
+    await interaction.response.defer()
+    embeds = []
+
+    for entry in BOT_DASHBOARD:
+        member = discord.utils.find(
+            lambda m: m.bot and m.display_name == entry["name_match"],
+            interaction.guild.members
+        )
+        embed = discord.Embed(
+            title=entry["title"],
+            description="\n".join(f"`{c}`" for c in entry["commands"]),
+            color=entry["color"]
+        )
+        if member:
+            embed.set_thumbnail(url=member.display_avatar.url)
+            status = "🟢 ออนไลน์" if member.status != discord.Status.offline else "🔴 ออฟไลน์"
+            embed.set_footer(text=f"{member.display_name} • {status}")
+        else:
+            embed.set_footer(text="⚠️ ยังไม่พบบอทตัวนี้ในเซิร์ฟเวอร์ (invite แล้วหรือยัง?)")
+        embeds.append(embed)
+
+    # ทีมบอทพูด (speaker bots) รวมเป็น embed เดียว — คุมผ่าน /relay ของบอท "หัวหน้า" เท่านั้น ไม่มีคำสั่งของตัวเอง
+    speaker_lines = []
+    first_speaker_avatar = None
+    for name in SPEAKER_BOT_NAMES:
+        m = discord.utils.find(lambda mm: mm.bot and mm.display_name == name, interaction.guild.members)
+        if m:
+            status = "🟢" if m.status != discord.Status.offline else "🔴"
+            speaker_lines.append(f"{status} {m.mention}")
+            if first_speaker_avatar is None:
+                first_speaker_avatar = m.display_avatar.url
+        else:
+            speaker_lines.append(f"⚫ {name} (ยังไม่ได้ invite)")
+
+    speaker_embed = discord.Embed(
+        title="🔊 ทีมบอทพูด — Voice Relay Speakers",
+        description="\n".join(speaker_lines) + "\n\nควบคุมผ่านคำสั่ง `/relay` ของบอท **หัวหน้า** เท่านั้น ไม่มีคำสั่งของตัวเอง",
+        color=0xEB459E
+    )
+    if first_speaker_avatar:
+        speaker_embed.set_thumbnail(url=first_speaker_avatar)
+    embeds.append(speaker_embed)
+
+    await interaction.followup.send(embeds=embeds[:10])
+
 @bot.event
 async def setup_hook():
     bot.add_view(QueueFullBoardView())
