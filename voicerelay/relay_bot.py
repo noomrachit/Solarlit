@@ -260,12 +260,19 @@ def has_relay_perms():
 
 
 # ─────────────────────────────────────────────
-# ระบบผูกบอทกับ "เจ้าของห้อง" ให้เข้า/ออกอัตโนมัติ
-# listener_binding: บอทฟัง ผูกกับเจ้าของห้องหลักได้ 1 คน
-# speaker_bindings: บอทพูดแต่ละตัว ผูกกับเจ้าของห้องย่อยได้คนละ 1 คน
+# ระบบผูกบอทกับ "ห้อง" ให้เข้า/ออกอัตโนมัติตามความเคลื่อนไหวของห้อง
+# เข้าเมื่อมีคนแรกเข้าห้อง (ห้องว่าง -> มีคน) / ออกเมื่อห้องว่าง (คนสุดท้ายออก)
+# ไม่ผูกกับคนใดคนหนึ่งอีกต่อไป
 # ─────────────────────────────────────────────
-listener_binding: dict = {"owner_id": None, "channel_id": None}
-speaker_bindings: dict = {}  # index -> {"owner_id":..., "channel_id":...}
+listener_binding: dict = {"channel_id": None}
+speaker_bindings: dict = {}  # index -> {"channel_id": ...}
+
+
+def _count_humans(channel) -> int:
+    """นับจำนวนคนที่ไม่ใช่บอทในห้องเสียง/สเตจ"""
+    if channel is None:
+        return 0
+    return len([m for m in channel.members if not m.bot])
 
 
 async def start_listening(channel: Union[discord.VoiceChannel, discord.StageChannel]):
@@ -425,43 +432,40 @@ async def relay_stop(interaction: discord.Interaction):
     await interaction.followup.send("🛑 หยุดถ่ายทอดเสียงทั้งหมดแล้ว", ephemeral=True)
 
 
-@relay_group.command(name="bindlistener", description="ผูกบอทฟังให้เข้า/ออกห้องหลักอัตโนมัติตามเจ้าของห้อง")
+@relay_group.command(name="bindlistener", description="ผูกบอทฟังให้เข้า/ออกห้องหลักอัตโนมัติตามความเคลื่อนไหวของห้อง")
 @has_relay_perms()
-@app_commands.describe(owner="เจ้าของห้อง (บอทจะเข้า/ออกตามคนนี้เข้า-ออกห้อง)", channel="ห้องหลักที่จะผูกไว้ (Voice หรือ Stage Channel)")
-async def relay_bindlistener(interaction: discord.Interaction, owner: discord.Member, channel: Union[discord.VoiceChannel, discord.StageChannel]):
-    listener_binding["owner_id"] = owner.id
+@app_commands.describe(channel="ห้องหลักที่จะผูกไว้ (Voice หรือ Stage Channel) — เข้าเมื่อมีคนเข้าห้อง ออกเมื่อห้องว่าง")
+async def relay_bindlistener(interaction: discord.Interaction, channel: Union[discord.VoiceChannel, discord.StageChannel]):
     listener_binding["channel_id"] = channel.id
     await interaction.response.send_message(
-        f"🔗 ผูกบอทฟังกับ {owner.mention} ในห้อง {channel.mention} แล้ว\n"
-        f"ต่อไปนี้: {owner.mention} เข้าห้องนี้ → บอทฟังตามเข้าอัตโนมัติ / {owner.mention} ออกจากห้องนี้ → บอทฟังตามออกอัตโนมัติ",
+        f"🔗 ผูกบอทฟังกับห้อง {channel.mention} แล้ว\n"
+        f"ต่อไปนี้: มีคนเข้าห้องนี้ (คนแรก) → บอทฟังตามเข้าอัตโนมัติ / ห้องว่าง (คนสุดท้ายออก) → บอทฟังตามออกอัตโนมัติ",
         ephemeral=True
     )
 
 
-@relay_group.command(name="bindspeaker", description="ผูกบอทพูดตัวที่ระบุให้เข้า/ออกห้องย่อยอัตโนมัติตามเจ้าของห้อง")
+@relay_group.command(name="bindspeaker", description="ผูกบอทพูดตัวที่ระบุให้เข้า/ออกห้องย่อยอัตโนมัติตามความเคลื่อนไหวของห้อง")
 @has_relay_perms()
 @app_commands.describe(
     index=f"หมายเลขบอทพูด (1-{len(SPEAKER_TOKENS)})",
-    owner="เจ้าของห้องย่อย (บอทจะเข้า/ออกตามคนนี้เข้า-ออกห้อง)",
-    channel="ห้องย่อยที่จะผูกไว้"
+    channel="ห้องย่อยที่จะผูกไว้ — เข้าเมื่อมีคนเข้าห้อง ออกเมื่อห้องว่าง"
 )
-async def relay_bindspeaker(interaction: discord.Interaction, index: int, owner: discord.Member, channel: discord.VoiceChannel):
+async def relay_bindspeaker(interaction: discord.Interaction, index: int, channel: discord.VoiceChannel):
     if index < 1 or index > len(speaker_bots):
         return await interaction.response.send_message(f"❌ หมายเลขบอทพูดต้องอยู่ระหว่าง 1-{len(speaker_bots)}", ephemeral=True)
 
     idx0 = index - 1
-    speaker_bindings[idx0] = {"owner_id": owner.id, "channel_id": channel.id}
+    speaker_bindings[idx0] = {"channel_id": channel.id}
     await interaction.response.send_message(
-        f"🔗 ผูกบอทพูดตัวที่ {index} กับ {owner.mention} ในห้อง {channel.mention} แล้ว\n"
-        f"ต่อไปนี้: {owner.mention} เข้าห้องนี้ → บอทพูดตัวที่ {index} ตามเข้าอัตโนมัติ / {owner.mention} ออก → บอทตามออกอัตโนมัติ",
+        f"🔗 ผูกบอทพูดตัวที่ {index} กับห้อง {channel.mention} แล้ว\n"
+        f"ต่อไปนี้: มีคนเข้าห้องนี้ (คนแรก) → บอทพูดตัวที่ {index} ตามเข้าอัตโนมัติ / ห้องว่าง → บอทตามออกอัตโนมัติ",
         ephemeral=True
     )
 
 
-@relay_group.command(name="unbind", description="ยกเลิกการผูกอัตโนมัติทั้งหมด (บอทจะไม่ตามเข้า-ออกใครอีก)")
+@relay_group.command(name="unbind", description="ยกเลิกการผูกอัตโนมัติทั้งหมด (บอทจะไม่ตามเข้า-ออกห้องไหนอีก)")
 @has_relay_perms()
 async def relay_unbind(interaction: discord.Interaction):
-    listener_binding["owner_id"] = None
     listener_binding["channel_id"] = None
     speaker_bindings.clear()
     await interaction.response.send_message("🔓 ยกเลิกการผูกอัตโนมัติทั้งหมดแล้ว (ยังใช้คำสั่งแบบ manual ได้ปกติ)", ephemeral=True)
@@ -471,15 +475,13 @@ async def relay_unbind(interaction: discord.Interaction):
 async def relay_status(interaction: discord.Interaction):
     lines = []
 
-    if listener_binding["owner_id"]:
-        owner = interaction.guild.get_member(listener_binding["owner_id"])
+    if listener_binding["channel_id"]:
         ch = interaction.guild.get_channel(listener_binding["channel_id"])
-        lines.append(f"🔗 บอทฟัง ผูกกับ {owner.mention if owner else '?'} ในห้อง {ch.mention if ch else '?'}")
+        lines.append(f"🔗 บอทฟัง ผูกกับห้อง {ch.mention if ch else '?'} (เข้า-ออกตามคนในห้อง)")
 
     for idx, binding in speaker_bindings.items():
-        owner = interaction.guild.get_member(binding["owner_id"])
         ch = interaction.guild.get_channel(binding["channel_id"])
-        lines.append(f"🔗 บอทพูดตัวที่ {idx + 1} ผูกกับ {owner.mention if owner else '?'} ในห้อง {ch.mention if ch else '?'}")
+        lines.append(f"🔗 บอทพูดตัวที่ {idx + 1} ผูกกับห้อง {ch.mention if ch else '?'} (เข้า-ออกตามคนในห้อง)")
 
     if lines:
         lines.append("")
@@ -546,23 +548,30 @@ async def on_ready():
 
 @listener_bot.event
 async def on_voice_state_update(member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
-    """บอทฟัง: ตามเจ้าของห้องหลักเข้า-ออกอัตโนมัติ ตาม /relay bindlistener ที่ตั้งไว้"""
-    if listener_binding["owner_id"] is None:
+    """บอทฟัง: เข้าเมื่อมีคนแรกเข้าห้องที่ผูกไว้ / ออกเมื่อห้องว่าง (ตาม /relay bindlistener)"""
+    if member.bot:
         return
-    if member.id != listener_binding["owner_id"]:
+    bound_channel_id = listener_binding["channel_id"]
+    if bound_channel_id is None:
         return
 
-    bound_channel_id = listener_binding["channel_id"]
     before_id = before.channel.id if before.channel else None
     after_id = after.channel.id if after.channel else None
+    if before_id == after_id:
+        return
 
-    if after_id == bound_channel_id and before_id != bound_channel_id:
-        try:
-            await start_listening(after.channel)
-        except Exception as e:
-            log.error(f"[Listener] Auto-join ล้มเหลว: {e}")
-    elif before_id == bound_channel_id and after_id != bound_channel_id:
-        await stop_listening()
+    # มีคนออกจากห้องที่ผูกไว้ -> เช็คว่าห้องว่างหรือยัง
+    if before_id == bound_channel_id and before.channel is not None:
+        if _count_humans(before.channel) == 0:
+            await stop_listening()
+
+    # มีคนเข้าห้องที่ผูกไว้ -> ถ้ายังไม่ได้ฟังอยู่ ให้เริ่มฟัง (คนแรกเข้า)
+    if after_id == bound_channel_id and after.channel is not None:
+        if not relay_active:
+            try:
+                await start_listening(after.channel)
+            except Exception as e:
+                log.error(f"[Listener] Auto-join ล้มเหลว: {e}")
 
 
 def make_speaker_ready_handler(index: int):
@@ -573,22 +582,29 @@ def make_speaker_ready_handler(index: int):
 
 def make_speaker_voice_handler(index: int):
     async def on_voice_state_update(member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
-        """บอทพูดตัวที่ index: ตามเจ้าของห้องย่อยเข้า-ออกอัตโนมัติ ตาม /relay bindspeaker ที่ตั้งไว้"""
-        binding = speaker_bindings.get(index)
-        if not binding or member.id != binding["owner_id"]:
+        """บอทพูดตัวที่ index: เข้าเมื่อมีคนแรกเข้าห้อง / ออกเมื่อห้องว่าง (ตาม /relay bindspeaker)"""
+        if member.bot:
             return
-
+        binding = speaker_bindings.get(index)
+        if not binding:
+            return
         bound_channel_id = binding["channel_id"]
+
         before_id = before.channel.id if before.channel else None
         after_id = after.channel.id if after.channel else None
+        if before_id == after_id:
+            return
 
-        if after_id == bound_channel_id and before_id != bound_channel_id:
-            try:
-                await start_speaking(index, after.channel)
-            except Exception as e:
-                log.error(f"[Speaker {index + 1}] Auto-join ล้มเหลว: {e}")
-        elif before_id == bound_channel_id and after_id != bound_channel_id:
-            await stop_speaking(index)
+        if before_id == bound_channel_id and before.channel is not None:
+            if _count_humans(before.channel) == 0:
+                await stop_speaking(index)
+
+        if after_id == bound_channel_id and after.channel is not None:
+            if index not in active_speaker_indices:
+                try:
+                    await start_speaking(index, after.channel)
+                except Exception as e:
+                    log.error(f"[Speaker {index + 1}] Auto-join ล้มเหลว: {e}")
 
     return on_voice_state_update
 
@@ -598,15 +614,28 @@ for i, sbot in enumerate(speaker_bots):
     sbot.event(make_speaker_voice_handler(i))
 
 
+async def _start_bot_safe(bot: commands.Bot, token: str, label: str):
+    """
+    login บอทแต่ละตัวแบบแยกอิสระ ถ้าตัวไหน token ผิด/login ไม่ผ่าน
+    จะ log error ไว้แล้วปล่อยให้บอทตัวอื่นทำงานต่อได้ตามปกติ ไม่ให้ทั้งระบบล่มไปด้วย
+    """
+    try:
+        await bot.start(token)
+    except discord.LoginFailure as e:
+        log.error(f"[{label}] Login ไม่ผ่าน (token ผิด/หมดอายุ): {e}")
+    except Exception as e:
+        log.error(f"[{label}] เกิดข้อผิดพลาดไม่คาดคิด: {e}")
+
+
 async def main():
     async with AsyncExitStack() as stack:
         await stack.enter_async_context(listener_bot)
         for sbot in speaker_bots:
             await stack.enter_async_context(sbot)
 
-        tasks = [listener_bot.start(LISTENER_TOKEN)]
-        for token, sbot in zip(SPEAKER_TOKENS, speaker_bots):
-            tasks.append(sbot.start(token))
+        tasks = [_start_bot_safe(listener_bot, LISTENER_TOKEN, "Listener")]
+        for i, (token, sbot) in enumerate(zip(SPEAKER_TOKENS, speaker_bots)):
+            tasks.append(_start_bot_safe(sbot, token, f"Speaker {i + 1}"))
         await asyncio.gather(*tasks)
 
 
