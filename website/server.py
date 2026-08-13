@@ -4,12 +4,17 @@ from aiohttp import web
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
+def _read_html(filename: str) -> str:
+    with open(os.path.join(BASE_DIR, filename), "r", encoding="utf-8") as f:
+        return f.read()
+
+
 async def index(request):
-    return web.FileResponse(os.path.join(BASE_DIR, "index.html"))
+    return web.Response(text=_read_html("index.html"), content_type="text/html", charset="utf-8")
 
 
 async def docs(request):
-    return web.FileResponse(os.path.join(BASE_DIR, "docs.html"))
+    return web.Response(text=_read_html("docs.html"), content_type="text/html", charset="utf-8")
 
 
 async def health(request):
