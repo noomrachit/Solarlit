@@ -4,6 +4,7 @@ import logging
 import csv
 import io
 from datetime import datetime, timezone
+from typing import Union
 
 import discord
 from discord import app_commands
@@ -17,6 +18,7 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 
 import database as db
+import access as billing_access
 
 load_dotenv()
 
@@ -34,6 +36,32 @@ intents.members = True        # ใช้แสดงชื่อสมาชิ
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
+
+# ห้องที่บอทยามติดตามได้ ต้องรวม Stage Channel ด้วย ไม่ใช่แค่ Voice Channel ธรรมดา
+# เพราะห้องถ่ายทอดสด/ห้องหลักของ Voice Relay มักตั้งเป็น Stage Channel (ตามคำแนะนำใน docs.html)
+# เดิม type hint จำกัดแค่ discord.VoiceChannel ทำให้ Discord ไม่ให้เลือก Stage Channel ใน /track add เลย
+TrackableChannel = Union[discord.VoiceChannel, discord.StageChannel]
+
+# กัน on_ready รันงาน setup ซ้ำ — discord.py จะยิง on_ready ใหม่ทุกครั้งที่ reconnect
+# ไม่ใช่แค่ตอน start ครั้งแรก ถ้าไม่กันไว้ health server จะพยายาม bind พอร์ตซ้ำ (address already in use)
+# และ tree.sync() จะถูกยิงถี่ๆ จนเสี่ยงโดน Discord rate-limit
+_ready_once = False
+
+
+@tree.check
+async def global_billing_check(interaction: discord.Interaction) -> bool:
+    """เช็คสิทธิ์สมาชิกก่อนทุกคำสั่ง (ยกเว้นเซิร์ฟเวอร์ที่อยู่ใน EXEMPT_GUILD_IDS)"""
+    if not interaction.guild:
+        return True
+    allowed, reason = await billing_access.check_guild_access(interaction.guild.id)
+    if not allowed:
+        try:
+            await interaction.response.send_message(reason, ephemeral=True)
+        except Exception:
+            pass
+        return False
+    return True
+
 
 
 def has_mod_perms():
@@ -148,7 +176,7 @@ async def reconcile_open_sessions():
         tracked = await get_tracked_channel_ids(guild.id)
         for channel_id in tracked:
             channel = guild.get_channel(channel_id)
-            if not isinstance(channel, discord.VoiceChannel):
+            if not isinstance(channel, (discord.VoiceChannel, discord.StageChannel)):
                 continue
             for m in channel.members:
                 if not m.bot:
@@ -173,7 +201,21 @@ async def start_health_server():
 
 @bot.event
 async def on_ready():
+    global _ready_once
     log.info(f"Logged in as {bot.user} (ID: {bot.user.id})")
+
+    if _ready_once:
+        # reconnect ครั้งถัดไป: อัปเดตแค่ presence และ reconcile session ที่ค้าง (idempotent) พอ
+        # ไม่ต้อง init DB / sync คำสั่ง / เปิด health server ซ้ำ
+        try:
+            await reconcile_open_sessions()
+        except Exception as e:
+            log.error(f"Reconcile failed: {e}")
+        await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="ห้องเสียง | /voice now"))
+        return
+
+    _ready_once = True
+
     try:
         await db.init_db()
     except Exception as e:
@@ -201,7 +243,7 @@ track_group = app_commands.Group(name="track", description="จัดการ�
 @track_group.command(name="add", description="เริ่มติดตามห้องเสียง")
 @has_mod_perms()
 @app_commands.describe(channel="ห้องเสียงที่ต้องการติดตาม")
-async def track_add(interaction: discord.Interaction, channel: discord.VoiceChannel):
+async def track_add(interaction: discord.Interaction, channel: TrackableChannel):
     pool = await db.get_pool()
     await pool.execute(
         """
@@ -221,7 +263,7 @@ async def track_add(interaction: discord.Interaction, channel: discord.VoiceChan
 @track_group.command(name="remove", description="เลิกติดตามห้องเสียง")
 @has_mod_perms()
 @app_commands.describe(channel="ห้องเสียงที่ต้องการเลิกติดตาม")
-async def track_remove(interaction: discord.Interaction, channel: discord.VoiceChannel):
+async def track_remove(interaction: discord.Interaction, channel: TrackableChannel):
     pool = await db.get_pool()
     # ปิด session ค้างของห้องนี้ทั้งหมดก่อนเลิกติดตาม เพื่อให้สถิติล่าสุดถูกต้อง
     open_rows = await pool.fetch(
@@ -270,7 +312,7 @@ voice_group = app_commands.Group(name="voice", description="ดูข้อม�
 
 @voice_group.command(name="now", description="ดูว่าใครอยู่ในห้องตอนนี้ และอยู่มานานเท่าไหร่")
 @app_commands.describe(channel="ห้องเสียงที่ต้องการดู")
-async def voice_now(interaction: discord.Interaction, channel: discord.VoiceChannel):
+async def voice_now(interaction: discord.Interaction, channel: TrackableChannel):
     pool = await db.get_pool()
     members_in = [m for m in channel.members if not m.bot]
 
@@ -308,7 +350,7 @@ async def voice_now(interaction: discord.Interaction, channel: discord.VoiceChan
 
 @voice_group.command(name="stats", description="สรุปเวลารวมของแต่ละคนในห้อง")
 @app_commands.describe(channel="ห้องเสียง", days="ย้อนหลังกี่วัน (ค่าเริ่มต้น 7 วัน, ใส่ 0 = ทั้งหมด)")
-async def voice_stats(interaction: discord.Interaction, channel: discord.VoiceChannel, days: app_commands.Range[int, 0, 365] = 7):
+async def voice_stats(interaction: discord.Interaction, channel: TrackableChannel, days: app_commands.Range[int, 0, 365] = 7):
     await interaction.response.defer()
     pool = await db.get_pool()
 
@@ -360,7 +402,7 @@ async def voice_stats(interaction: discord.Interaction, channel: discord.VoiceCh
 
 @voice_group.command(name="export", description="ส่งออกข้อมูลการเข้าห้องเป็นไฟล์ CSV (เปิดด้วย Excel ได้)")
 @app_commands.describe(channel="ห้องเสียง", days="ย้อนหลังกี่วัน (ค่าเริ่มต้น 30 วัน, ใส่ 0 = ทั้งหมด)")
-async def voice_export(interaction: discord.Interaction, channel: discord.VoiceChannel, days: app_commands.Range[int, 0, 365] = 30):
+async def voice_export(interaction: discord.Interaction, channel: TrackableChannel, days: app_commands.Range[int, 0, 365] = 30):
     await interaction.response.defer(ephemeral=True)
     pool = await db.get_pool()
 
@@ -413,7 +455,7 @@ async def voice_export(interaction: discord.Interaction, channel: discord.VoiceC
 
 @voice_group.command(name="graph", description="ดูกราฟกิจกรรม (เวลารวมต่อวัน) ของห้องเสียง")
 @app_commands.describe(channel="ห้องเสียง", days="ย้อนหลังกี่วัน (ค่าเริ่มต้น 14 วัน)")
-async def voice_graph(interaction: discord.Interaction, channel: discord.VoiceChannel, days: app_commands.Range[int, 1, 90] = 14):
+async def voice_graph(interaction: discord.Interaction, channel: TrackableChannel, days: app_commands.Range[int, 1, 90] = 14):
     await interaction.response.defer()
     pool = await db.get_pool()
 
