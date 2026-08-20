@@ -18,7 +18,9 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 
 import database as db
-import access as billing_access
+# หมายเหตุ: import access as billing_access ถูกลบออก — ไม่มีไฟล์ access.py อยู่จริงใน repo นี้เลย
+# (ไม่มีทั้งใน voicebot/, bot/, voicerelay/, website/) ทำให้ deploy พังด้วย ModuleNotFoundError
+# ถ้าต้องการเช็คสิทธิ์สมาชิกก่อนใช้คำสั่ง ต้องสร้าง access.py จริงก่อน แล้วค่อยเปิดใช้ global_billing_check ใหม่
 
 load_dotenv()
 
@@ -46,22 +48,6 @@ TrackableChannel = Union[discord.VoiceChannel, discord.StageChannel]
 # ไม่ใช่แค่ตอน start ครั้งแรก ถ้าไม่กันไว้ health server จะพยายาม bind พอร์ตซ้ำ (address already in use)
 # และ tree.sync() จะถูกยิงถี่ๆ จนเสี่ยงโดน Discord rate-limit
 _ready_once = False
-
-
-@tree.check
-async def global_billing_check(interaction: discord.Interaction) -> bool:
-    """เช็คสิทธิ์สมาชิกก่อนทุกคำสั่ง (ยกเว้นเซิร์ฟเวอร์ที่อยู่ใน EXEMPT_GUILD_IDS)"""
-    if not interaction.guild:
-        return True
-    allowed, reason = await billing_access.check_guild_access(interaction.guild.id)
-    if not allowed:
-        try:
-            await interaction.response.send_message(reason, ephemeral=True)
-        except Exception:
-            pass
-        return False
-    return True
-
 
 
 def has_mod_perms():
