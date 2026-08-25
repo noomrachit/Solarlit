@@ -156,3 +156,10 @@ async def init_db():
             ALTER TABLE queue ADD COLUMN IF NOT EXISTS called BOOLEAN DEFAULT FALSE;
             """
         )
+
+        # Migration: role ที่จะถูกปิงเมื่อมีคนกดปุ่ม "เรียกแอดมิน"/"ขอความช่วยเหลือ" ใน Support Panel
+        await conn.execute(
+            """
+            ALTER TABLE settings ADD COLUMN IF NOT EXISTS support_role BIGINT;
+            """
+        )

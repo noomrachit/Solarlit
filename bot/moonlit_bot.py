@@ -1043,23 +1043,50 @@ async def queue_board(interaction: discord.Interaction):
 tree.add_command(queue_group)
 
 # Support
+async def _notify_support_request(interaction: discord.Interaction, *, emoji: str, action_text: str):
+    """
+    แจ้งเตือนเมื่อมีคนกดปุ่มใน Support Panel — ระบุคน (ผู้กด) + ห้อง (ที่กด) เสมอ
+    และปิง role แอดมิน (ถ้าตั้งไว้ด้วย /settings supportrole) ทั้งในห้องที่กด และห้อง log
+    (ถ้าตั้งไว้ด้วย /settings logchannel) เผื่อแอดมินไม่ได้อยู่ในห้องนั้น
+    """
+    settings = await get_settings(interaction.guild.id)
+    role_id = settings.get("support_role")
+    role_mention = f"<@&{role_id}>" if role_id else ""
+
+    origin_text = (
+        f"{emoji} {role_mention} {interaction.user.mention} {action_text}ที่ห้อง "
+        f"{interaction.channel.mention} — รอสักครู่"
+    ).replace("  ", " ")
+    await interaction.response.send_message(origin_text, ephemeral=False)
+
+    log_channel_id = settings.get("log_channel")
+    if log_channel_id and log_channel_id != interaction.channel.id:
+        log_channel = interaction.guild.get_channel(log_channel_id)
+        if log_channel:
+            # หมายเหตุ: ข้อความธรรมดาใน Discord ไม่ render markdown link แบบ [text](url)
+            # (ใช้ได้แค่ใน embed) เลยต้องแปะ URL ตรงๆ ให้ Discord auto-link ให้เอง
+            jump_url = f"https://discord.com/channels/{interaction.guild.id}/{interaction.channel.id}"
+            log_text = (
+                f"{emoji} {role_mention} {interaction.user.mention} {action_text}ที่ห้อง "
+                f"{interaction.channel.mention} — {jump_url}"
+            ).replace("  ", " ")
+            try:
+                await log_channel.send(log_text)
+            except Exception:
+                pass
+
+
 class SupportView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
     @discord.ui.button(label="เรียกแอดมิน", style=discord.ButtonStyle.danger, custom_id="support_admin")
     async def call_admin(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message(
-            f"🔔 {interaction.user.mention} เรียกแอดมินแล้ว — รอสักครู่",
-            ephemeral=False
-        )
+        await _notify_support_request(interaction, emoji="🔔", action_text="เรียกแอดมินแล้ว")
 
     @discord.ui.button(label="ขอความช่วยเหลือ", style=discord.ButtonStyle.primary, custom_id="support_help")
     async def request_help(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message(
-            f"📩 {interaction.user.mention} ขอความช่วยเหลือแล้ว — แอดมินจะติดต่อกลับ",
-            ephemeral=False
-        )
+        await _notify_support_request(interaction, emoji="📩", action_text="ขอความช่วยเหลือแล้ว")
 
 support_group = app_commands.Group(name="supportpanel", description="แผงช่วยเหลือ")
 
@@ -1089,6 +1116,17 @@ async def settings_logchannel(interaction: discord.Interaction, channel: discord
         ON CONFLICT (guild_id) DO UPDATE SET log_channel = $2
     """, interaction.guild.id, channel.id)
     await interaction.response.send_message(f"ตั้ง log channel เป็น {channel.mention} แล้ว", ephemeral=True)
+
+@settings_group.command(name="supportrole", description="ตั้ง role ที่จะถูกปิงเมื่อมีคนกดปุ่มใน Support Panel")
+@has_mod_perms()
+@app_commands.describe(role="Role ของแอดมิน/ทีมงานที่จะถูกปิง")
+async def settings_supportrole(interaction: discord.Interaction, role: discord.Role):
+    pool = await db.get_pool()
+    await pool.execute("""
+        INSERT INTO settings (guild_id, support_role) VALUES ($1, $2)
+        ON CONFLICT (guild_id) DO UPDATE SET support_role = $2
+    """, interaction.guild.id, role.id)
+    await interaction.response.send_message(f"ตั้ง role ที่ปิงตอนมีคนขอความช่วยเหลือเป็น {role.mention} แล้ว", ephemeral=True)
 
 tree.add_command(settings_group)
 
@@ -1620,6 +1658,7 @@ async def help_cmd(interaction: discord.Interaction):
     embed.add_field(name="/stage", value="create • delete • topic • rename — จัดการห้องกระจายเสียง", inline=False)
     embed.add_field(name="/supportpanel panel", value="โพสต์แผงช่วยเหลือ", inline=False)
     embed.add_field(name="/settings logchannel", value="ตั้งช่อง log", inline=False)
+    embed.add_field(name="/settings supportrole", value="ตั้ง role ที่ปิงตอนมีคนขอความช่วยเหลือใน Support Panel", inline=False)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
