@@ -140,7 +140,6 @@ listener_bot = commands.Bot(command_prefix="!", intents=intents_listener)
 tree = listener_bot.tree
 
 
-@tree.check
 async def global_billing_check(interaction: discord.Interaction) -> bool:
     """เช็คสิทธิ์สมาชิกก่อนทุกคำสั่ง /relay (ยกเว้นเซิร์ฟเวอร์ที่อยู่ใน EXEMPT_GUILD_IDS)"""
     if not interaction.guild:
@@ -153,6 +152,11 @@ async def global_billing_check(interaction: discord.Interaction) -> bool:
             pass
         return False
     return True
+
+# app_commands.CommandTree ไม่มี decorator @tree.check แบบ commands.Bot — ต้องตั้งผ่าน
+# interaction_check ตรงๆ แทน (assign ฟังก์ชันเข้า instance attribute เพื่อ override
+# CommandTree.interaction_check ที่ปกติ return True เฉยๆ)
+tree.interaction_check = global_billing_check
 
 
 # ── บอทพูด N ตัว ──
