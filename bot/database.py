@@ -118,6 +118,12 @@ async def init_db():
                 PRIMARY KEY (guild_id, channel_id)
             );
 
+            CREATE TABLE IF NOT EXISTS dashboard_board (
+                guild_id BIGINT PRIMARY KEY,
+                channel_id BIGINT NOT NULL,
+                message_id BIGINT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS queue_bookings (
                 id SERIAL PRIMARY KEY,
                 guild_id BIGINT NOT NULL,
@@ -161,5 +167,12 @@ async def init_db():
         await conn.execute(
             """
             ALTER TABLE settings ADD COLUMN IF NOT EXISTS support_role BIGINT;
+            """
+        )
+
+        # Migration: ช่องที่จะปักหมุดกระดานรวมคำสั่งบอททุกตัว (/settings dashboardchannel)
+        await conn.execute(
+            """
+            ALTER TABLE settings ADD COLUMN IF NOT EXISTS dashboard_channel BIGINT;
             """
         )

@@ -146,6 +146,10 @@ async def on_ready():
     asyncio.create_task(start_health_server())
     if not check_bookings.is_running():
         check_bookings.start()
+    try:
+        await refresh_all_dashboard_boards()
+    except Exception as e:
+        log.error(f"Refresh dashboard boards failed: {e}")
 
 @bot.event
 async def on_member_join(member: discord.Member):
@@ -1128,6 +1132,19 @@ async def settings_supportrole(interaction: discord.Interaction, role: discord.R
     """, interaction.guild.id, role.id)
     await interaction.response.send_message(f"ตั้ง role ที่ปิงตอนมีคนขอความช่วยเหลือเป็น {role.mention} แล้ว", ephemeral=True)
 
+@settings_group.command(name="dashboardchannel", description="ตั้งช่องปักหมุดกระดานรวมคำสั่งบอททุกตัว (สำหรับแอดมิน/คนใหม่)")
+@has_mod_perms()
+@app_commands.describe(channel="ช่องที่จะโพสต์/ปักหมุดกระดานรวมบอท")
+async def settings_dashboardchannel(interaction: discord.Interaction, channel: discord.TextChannel):
+    pool = await db.get_pool()
+    await pool.execute("""
+        INSERT INTO settings (guild_id, dashboard_channel) VALUES ($1, $2)
+        ON CONFLICT (guild_id) DO UPDATE SET dashboard_channel = $2
+    """, interaction.guild.id, channel.id)
+    await interaction.response.defer(ephemeral=True)
+    await refresh_dashboard_board(interaction.guild, channel.id)
+    await interaction.followup.send(f"ตั้งช่องกระดานรวมบอทเป็น {channel.mention} และปักหมุดให้เรียบร้อย", ephemeral=True)
+
 tree.add_command(settings_group)
 
 # ─── Voice Channel commands ──────────────────────────────────────────────────
@@ -1659,6 +1676,8 @@ async def help_cmd(interaction: discord.Interaction):
     embed.add_field(name="/supportpanel panel", value="โพสต์แผงช่วยเหลือ", inline=False)
     embed.add_field(name="/settings logchannel", value="ตั้งช่อง log", inline=False)
     embed.add_field(name="/settings supportrole", value="ตั้ง role ที่ปิงตอนมีคนขอความช่วยเหลือใน Support Panel", inline=False)
+    embed.add_field(name="/settings dashboardchannel", value="ตั้งช่องปักหมุดกระดานรวมคำสั่งบอททุกตัว (สำหรับคนใหม่)", inline=False)
+    embed.add_field(name="/dashboard", value="แสดงกระดานรวมบอททั้งหมด พร้อมคำสั่งเริ่มต้นง่ายๆ", inline=False)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
@@ -1703,16 +1722,38 @@ BOT_DASHBOARD = [
 
 SPEAKER_BOT_NAMES = ["ลูกน้อง", "ลูกน้อง 1", "ลูกน้อง 2", "ลูกน้อง 3", "ลูกน้อง 4"]
 
+# คำสั่งที่ใช้บ่อยที่สุด อธิบายเป็นภาษาพูดง่ายๆ สำหรับคนที่ไม่เคยใช้บอทมาก่อน
+# (ต่างจาก BOT_DASHBOARD ด้านบนที่เป็น syntax ดิบสำหรับคนที่คุ้นแล้ว)
+BEGINNER_COMMANDS = [
+    ("/help", "ดูคำสั่งทั้งหมดของบอทแบบละเอียด"),
+    ("/ping", "เช็คว่าบอทออนไลน์อยู่ไหม"),
+    ("/queue join", "เข้าคิว"),
+    ("/queue list", "ดูว่าตอนนี้คิวถึงใครแล้ว"),
+    ("ปุ่มในห้อง Support Panel", "ต้องการความช่วยเหลือ/เรียกแอดมิน กดปุ่มได้เลยไม่ต้องพิมพ์คำสั่ง"),
+]
 
-@tree.command(name="dashboard", description="แสดงกระดานรวมบอททั้งหมดในเซิร์ฟเวอร์ พร้อมรูปและคำสั่งของแต่ละตัว")
-async def dashboard_cmd(interaction: discord.Interaction):
-    await interaction.response.defer()
+
+def build_dashboard_embeds(guild: discord.Guild) -> list[discord.Embed]:
+    """
+    สร้างชุด embed กระดานรวมบอททั้งหมด — ใช้ร่วมกันทั้งจาก /dashboard (เรียกเองครั้งเดียว)
+    และ refresh_dashboard_board (auto-refresh ตอนบอท ready ถ้าตั้งช่องปักหมุดไว้)
+    """
     embeds = []
+
+    beginner_embed = discord.Embed(
+        title="👋 เริ่มต้นใช้งานง่ายๆ (สำหรับคนใหม่)",
+        description=(
+            "\n".join(f"`{cmd}` — {desc}" for cmd, desc in BEGINNER_COMMANDS)
+            + "\n\nดูคำสั่งแบบเต็มของแต่ละบอทได้ด้านล่าง 👇"
+        ),
+        color=0x2ECC71,
+    )
+    embeds.append(beginner_embed)
 
     for entry in BOT_DASHBOARD:
         member = discord.utils.find(
             lambda m: m.bot and m.display_name == entry["name_match"],
-            interaction.guild.members
+            guild.members
         )
         embed = discord.Embed(
             title=entry["title"],
@@ -1731,7 +1772,7 @@ async def dashboard_cmd(interaction: discord.Interaction):
     speaker_lines = []
     first_speaker_avatar = None
     for name in SPEAKER_BOT_NAMES:
-        m = discord.utils.find(lambda mm: mm.bot and mm.display_name == name, interaction.guild.members)
+        m = discord.utils.find(lambda mm: mm.bot and mm.display_name == name, guild.members)
         if m:
             status = "🟢" if m.status != discord.Status.offline else "🔴"
             speaker_lines.append(f"{status} {m.mention}")
@@ -1749,7 +1790,67 @@ async def dashboard_cmd(interaction: discord.Interaction):
         speaker_embed.set_thumbnail(url=first_speaker_avatar)
     embeds.append(speaker_embed)
 
-    await interaction.followup.send(embeds=embeds[:10])
+    return embeds[:10]  # Discord จำกัดจำนวน embed ต่อข้อความไว้ที่ 10
+
+
+async def refresh_dashboard_board(guild: discord.Guild, channel_id: int):
+    """
+    โพสต์/อัปเดตกระดานรวมบอทในช่องที่ตั้งไว้ผ่าน /settings dashboardchannel
+    แก้ข้อความเดิมถ้ามีอยู่แล้ว (ไม่โพสต์ใหม่ทุกครั้งที่บอท restart กันห้องรก) ปักหมุดให้ตอนโพสต์ครั้งแรก
+    """
+    channel = guild.get_channel(channel_id)
+    if not channel:
+        return
+    embeds = build_dashboard_embeds(guild)
+    pool = await db.get_pool()
+
+    row = await pool.fetchrow("SELECT message_id FROM dashboard_board WHERE guild_id = $1", guild.id)
+    if row:
+        try:
+            msg = await channel.fetch_message(row["message_id"])
+            await msg.edit(embeds=embeds)
+            return
+        except discord.NotFound:
+            pass  # ข้อความเดิมถูกลบไปแล้ว โพสต์ใหม่ด้านล่างแทน
+        except Exception as e:
+            log.error(f"แก้ไขกระดานรวมบอทเดิมไม่สำเร็จ: {e}")
+            return
+
+    try:
+        msg = await channel.send(embeds=embeds)
+        try:
+            await msg.pin()
+        except Exception:
+            pass  # ไม่มีสิทธิ์ปักหมุดก็ไม่เป็นไร โพสต์ไว้เฉยๆ ยังใช้ได้
+    except Exception as e:
+        log.error(f"โพสต์กระดานรวมบอทใหม่ไม่สำเร็จ: {e}")
+        return
+
+    await pool.execute(
+        """
+        INSERT INTO dashboard_board (guild_id, channel_id, message_id)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (guild_id) DO UPDATE SET channel_id = $2, message_id = $3
+        """,
+        guild.id, channel.id, msg.id
+    )
+
+
+async def refresh_all_dashboard_boards():
+    """เรียกตอนบอท ready — รีเฟรชกระดานรวมบอทของทุกเซิร์ฟเวอร์ที่ตั้งช่องไว้"""
+    pool = await db.get_pool()
+    rows = await pool.fetch("SELECT guild_id, dashboard_channel FROM settings WHERE dashboard_channel IS NOT NULL")
+    for row in rows:
+        guild = bot.get_guild(row["guild_id"])
+        if guild:
+            await refresh_dashboard_board(guild, row["dashboard_channel"])
+
+
+@tree.command(name="dashboard", description="แสดงกระดานรวมบอททั้งหมดในเซิร์ฟเวอร์ พร้อมรูปและคำสั่งของแต่ละตัว")
+async def dashboard_cmd(interaction: discord.Interaction):
+    await interaction.response.defer()
+    embeds = build_dashboard_embeds(interaction.guild)
+    await interaction.followup.send(embeds=embeds)
 
 @bot.event
 async def setup_hook():
