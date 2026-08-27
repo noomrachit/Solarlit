@@ -26,6 +26,7 @@ import os
 import asyncio
 import logging
 import struct
+import time
 from collections import defaultdict
 from contextlib import AsyncExitStack
 from typing import Union
@@ -38,6 +39,8 @@ from discord.ext import commands
 from discord.ext import voice_recv
 from dotenv import load_dotenv
 from aiohttp import web
+
+import access as billing_access
 
 load_dotenv()
 
@@ -136,6 +139,26 @@ intents_listener.guilds = True
 listener_bot = commands.Bot(command_prefix="!", intents=intents_listener)
 tree = listener_bot.tree
 
+
+async def global_billing_check(interaction: discord.Interaction) -> bool:
+    """เช็คสิทธิ์สมาชิกก่อนทุกคำสั่ง /relay (ยกเว้นเซิร์ฟเวอร์ที่อยู่ใน EXEMPT_GUILD_IDS)"""
+    if not interaction.guild:
+        return True
+    allowed, reason = await billing_access.check_guild_access(interaction.guild.id)
+    if not allowed:
+        try:
+            await interaction.response.send_message(reason, ephemeral=True)
+        except Exception:
+            pass
+        return False
+    return True
+
+# app_commands.CommandTree ไม่มี decorator @tree.check แบบ commands.Bot — ต้องตั้งผ่าน
+# interaction_check ตรงๆ แทน (assign ฟังก์ชันเข้า instance attribute เพื่อ override
+# CommandTree.interaction_check ที่ปกติ return True เฉยๆ)
+tree.interaction_check = global_billing_check
+
+
 # ── บอทพูด N ตัว ──
 speaker_bots: list = []
 for _ in SPEAKER_TOKENS:
@@ -178,7 +201,20 @@ mixer = Mixer()
 
 
 class RelaySink(voice_recv.AudioSink):
-    """รับเสียง PCM ที่ decode แล้วจากทุกคนในห้องหลัก แล้วป้อนเข้า mixer"""
+    """
+    รับเสียง PCM ที่ decode แล้วจากทุกคนในห้องหลัก แล้วป้อนเข้า mixer
+    มีระบบ "warm-up mute" — ตอนมีคนเริ่มพูดใหม่ (decoder ตัวใหม่ถูกสร้าง)
+    ช่วงแรกๆ มักเจอ error decode เสียงพัง (corrupted stream) เพราะ decoder ยังไม่เสถียร
+    เลยเงียบเสียงคนนั้นไปก่อนสั้นๆ (WARMUP_SECONDS) รอให้ decoder นิ่งก่อนค่อยปล่อยเสียงเข้าระบบจริง
+    ผลคือผู้ฟังได้ยิน "เงียบสั้นๆ" แทน "เสียงแตก" ตอนมีคนเริ่มพูด
+    """
+
+    WARMUP_SECONDS = 0.25
+    SILENCE_RESET_SECONDS = 1.5  # เงียบเกินนี้ = ถือว่าเริ่มพูดใหม่ (decoder ตัวใหม่ถูกสร้างอีกรอบ)
+
+    def __init__(self):
+        self._first_seen: dict = {}   # user_id -> เวลาที่เริ่มเห็น packet แรกของ "รอบพูด" นี้
+        self._last_seen: dict = {}    # user_id -> เวลาที่เห็น packet ล่าสุด (ไว้ตรวจจับช่วงเงียบ)
 
     def wants_opus(self) -> bool:
         return False
@@ -186,10 +222,27 @@ class RelaySink(voice_recv.AudioSink):
     def write(self, user, data):
         if user is None or user.bot:
             return
+
+        now = time.monotonic()
+        last_seen = self._last_seen.get(user.id)
+        first_seen = self._first_seen.get(user.id)
+
+        # เงียบไปนานเกินไป (หรือพูดครั้งแรก) = เริ่มรอบ warm-up ใหม่
+        if first_seen is None or last_seen is None or (now - last_seen) > self.SILENCE_RESET_SECONDS:
+            self._first_seen[user.id] = now
+            self._last_seen[user.id] = now
+            return  # เฟรมแรกของรอบใหม่ ข้ามไปเลย ไม่ป้อนเข้า mixer
+
+        self._last_seen[user.id] = now
+
+        if now - first_seen < self.WARMUP_SECONDS:
+            return  # ยังอยู่ในช่วง warm-up เงียบไว้ก่อน กัน corrupted stream หลุดออกไปเป็นเสียงแตก
+
         mixer.feed(user.id, data.pcm)
 
     def cleanup(self):
-        pass
+        self._first_seen.clear()
+        self._last_seen.clear()
 
 
 class QueueAudioSource(discord.AudioSource):
@@ -302,6 +355,19 @@ async def start_speaking(index: int, channel: discord.VoiceChannel):
     """เริ่มให้บอทพูดตัวที่ index เข้าห้องย่อยและเล่นเสียง"""
     if index in active_speaker_indices:
         return
+
+    # เช็คโควต้าจำนวนบอทตามแพ็กเกจของเซิร์ฟเวอร์นี้ ก่อนเปิดบอทพูดตัวใหม่
+    # นับรวมบอทฟัง (ถ้ากำลังทำงานอยู่) + บอทพูดที่ใช้อยู่แล้ว
+    limit = await billing_access.get_relay_bot_limit(channel.guild.id)
+    current_bots_in_use = (1 if relay_active else 0) + len(active_speaker_indices)
+    if current_bots_in_use + 1 > limit:
+        log.warning(
+            f"[Speaker {index + 1}] ปฏิเสธการเข้าห้อง {channel.name}: "
+            f"เกินโควต้าแพ็กเกจของเซิร์ฟเวอร์ (ใช้อยู่ {current_bots_in_use}/{limit} บอท) "
+            f"— อัปเกรดแพ็กเกจเพื่อเพิ่มจำนวนห้องที่ถ่ายทอดพร้อมกันได้"
+        )
+        return
+
     speaker_bot = speaker_bots[index]
     target_guild = speaker_bot.get_guild(channel.guild.id)
     target_channel = target_guild.get_channel(channel.id) if target_guild else None
@@ -389,6 +455,14 @@ async def relay_addtarget(interaction: discord.Interaction, channel: discord.Voi
         return await interaction.followup.send(f"❌ บอทพูดตัวที่ {free_index + 1} เชื่อมต่อห้องไม่สำเร็จ: {e}", ephemeral=True)
 
     if free_index not in active_speaker_indices:
+        limit = await billing_access.get_relay_bot_limit(interaction.guild.id)
+        current_bots_in_use = (1 if relay_active else 0) + len(active_speaker_indices)
+        if current_bots_in_use >= limit:
+            return await interaction.followup.send(
+                f"❌ ใช้บอทครบตามโควต้าแพ็กเกจแล้ว ({current_bots_in_use}/{limit} บอท) "
+                f"อัปเกรดแพ็กเกจเพื่อถ่ายทอดได้หลายห้องขึ้นได้ที่เว็บไซต์",
+                ephemeral=True
+            )
         return await interaction.followup.send(
             f"❌ บอทพูดตัวที่ {free_index + 1} ยังไม่ได้ invite เข้าเซิร์ฟเวอร์นี้ (หรือมองไม่เห็นห้องนี้)",
             ephemeral=True
