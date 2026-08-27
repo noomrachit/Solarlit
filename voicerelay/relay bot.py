@@ -119,6 +119,23 @@ def _patch_voice_recv_resilience():
         else:
             log.warning("ไม่พบ PacketRouter._do_run สำหรับแพตช์ (โครงสร้างไลบรารีอาจเปลี่ยน)")
 
+    # เพิ่มขนาด jitter buffer ของ voice_recv (ค่า default: maxsize=10, prefsize=1, prefill=1)
+    # prefsize=1 บางมาก แปลว่าแพ็กเก็ตที่มาช้า/สลับลำดับแม้แค่นิดเดียว (jitter ปกติของเน็ตจริง
+    # โดยเฉพาะ path ไกลๆ) ถูกนับว่า "หลุด" ทันที เกิด log "packets were lost being flushed" ถี่ๆ
+    # ระหว่างที่คนกำลังพูดอยู่ต่อเนื่อง (คนละจุดกับตอนเริ่มพูดใหม่ที่ warm-up mute ข้างบนดูแลอยู่แล้ว)
+    # เพิ่ม prefsize/maxsize ให้ buffer รอแพ็กเก็ตที่มาช้าได้นานขึ้นก่อนตัดสินว่าหลุดจริง แลกกับ
+    # latency เพิ่มขึ้นเล็กน้อย (~80ms) ซึ่งเทียบไม่มากกับ latency รวมของทั้งระบบที่มีอยู่แล้ว (0.3-0.8 วิ)
+    if vr_opus is not None:
+        try:
+            from discord.ext.voice_recv.buffer import HeapJitterBuffer
+            import functools
+            vr_opus.JitterBuffer = functools.partial(
+                HeapJitterBuffer, maxsize=20, prefsize=4, prefill=2
+            )
+            log.info("แพตช์ JitterBuffer ให้ทนต่อ jitter มากขึ้น (prefsize 1->4) สำเร็จ")
+        except Exception as e:
+            log.warning(f"แพตช์ JitterBuffer ไม่สำเร็จ (ข้ามได้ ไม่ critical): {e}")
+
 
 _patch_voice_recv_resilience()
 
