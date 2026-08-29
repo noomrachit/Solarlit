@@ -1,0 +1,13 @@
+{
+  "name": "moonlit",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck:libs": "tsc -b lib/db lib/api-zod lib/api-client-react",
+    "typecheck": "pnpm run typecheck:libs && pnpm --filter @workspace/api-server run typecheck && pnpm --filter @workspace/dashboard run typecheck && pnpm --filter @workspace/commands run typecheck && pnpm --filter @workspace/mockup-sandbox run typecheck && pnpm --filter @workspace/scripts run typecheck",
+    "build": "pnpm run typecheck:libs && pnpm --filter @workspace/api-server run build && pnpm --filter @workspace/dashboard run build && pnpm --filter @workspace/commands run build && pnpm --filter @workspace/mockup-sandbox run build"
+  },
+  "devDependencies": {
+    "typescript": "6.0.3"
+  }
+}
