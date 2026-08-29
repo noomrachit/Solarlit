@@ -37,6 +37,11 @@ jobs:
 
       - name: Build
         run: pnpm run build
+        env:
+          # dashboard/commands/mockup-sandbox vite.config.ts require these at build time;
+          # CI only needs the bundles to compile, not to be served, so placeholder values are fine
+          PORT: "5000"
+          BASE_PATH: "/"
 
   bot:
     name: Python bot
