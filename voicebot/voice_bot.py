@@ -334,7 +334,7 @@ async def voice_now(interaction: discord.Interaction, channel: TrackableChannel)
     await interaction.response.send_message(embed=embed)
 
 
-@voice_group.command(name="stats", description="สรุปเวลารวมของแต่ละคนในห้อง")
+@voice_group.command(name="stats", description="สรุปเวลารวมของแต่ละคนในห้อง (สูงสุด 200 คน)")
 @app_commands.describe(channel="ห้องเสียง", days="ย้อนหลังกี่วัน (ค่าเริ่มต้น 7 วัน, ใส่ 0 = ทั้งหมด)")
 async def voice_stats(interaction: discord.Interaction, channel: TrackableChannel, days: app_commands.Range[int, 0, 365] = 7):
     await interaction.response.defer()
@@ -349,7 +349,7 @@ async def voice_stats(interaction: discord.Interaction, channel: TrackableChanne
             WHERE guild_id = $1 AND channel_id = $2 AND joined_at >= NOW() - ($3 || ' days')::interval
             GROUP BY user_id
             ORDER BY total_seconds DESC
-            LIMIT 20
+            LIMIT 200
         """
         rows = await pool.fetch(query, interaction.guild.id, channel.id, str(days))
     else:
@@ -361,7 +361,7 @@ async def voice_stats(interaction: discord.Interaction, channel: TrackableChanne
             WHERE guild_id = $1 AND channel_id = $2
             GROUP BY user_id
             ORDER BY total_seconds DESC
-            LIMIT 20
+            LIMIT 200
         """
         rows = await pool.fetch(query, interaction.guild.id, channel.id)
 
@@ -376,14 +376,24 @@ async def voice_stats(interaction: discord.Interaction, channel: TrackableChanne
         lines.append(f"`{i}.` {name} — **{mins} นาที** ({r['session_count']} ครั้ง)")
 
     period_text = f"{days} วันล่าสุด" if days > 0 else "ทั้งหมดตั้งแต่เริ่มติดตาม"
-    embed = discord.Embed(
-        title=f"📊 สถิติห้อง {channel.name}",
-        description="\n".join(lines),
-        color=0x5865F2,
-        timestamp=datetime.now(timezone.utc)
-    )
-    embed.set_footer(text=f"ช่วงเวลา: {period_text}")
-    await interaction.followup.send(embed=embed)
+
+    # Discord จำกัด embed description ไว้ที่ 4096 ตัวอักษร — พอเพิ่มโควต้าเป็น 200 คน
+    # รายชื่ออาจยาวเกินพอดี เลยแบ่งเป็นหลาย embed (หน้าละ 40 คน) กันข้อความเกินแล้วส่งไม่ออก
+    PAGE_SIZE = 40
+    pages = [lines[i:i + PAGE_SIZE] for i in range(0, len(lines), PAGE_SIZE)]
+
+    for page_num, page_lines in enumerate(pages, 1):
+        title = f"📊 สถิติห้อง {channel.name}"
+        if len(pages) > 1:
+            title += f" (หน้า {page_num}/{len(pages)})"
+        embed = discord.Embed(
+            title=title,
+            description="\n".join(page_lines),
+            color=0x5865F2,
+            timestamp=datetime.now(timezone.utc)
+        )
+        embed.set_footer(text=f"ช่วงเวลา: {period_text}")
+        await interaction.followup.send(embed=embed)
 
 
 @voice_group.command(name="export", description="ส่งออกข้อมูลการเข้าห้องเป็นไฟล์ CSV (เปิดด้วย Excel ได้)")
