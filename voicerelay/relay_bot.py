@@ -203,13 +203,14 @@ mixer = Mixer()
 class RelaySink(voice_recv.AudioSink):
     """
     รับเสียง PCM ที่ decode แล้วจากทุกคนในห้องหลัก แล้วป้อนเข้า mixer
-    มีระบบ "warm-up mute" — ตอนมีคนเริ่มพูดใหม่ (decoder ตัวใหม่ถูกสร้าง)
-    ช่วงแรกๆ มักเจอ error decode เสียงพัง (corrupted stream) เพราะ decoder ยังไม่เสถียร
-    เลยเงียบเสียงคนนั้นไปก่อนสั้นๆ (WARMUP_SECONDS) รอให้ decoder นิ่งก่อนค่อยปล่อยเสียงเข้าระบบจริง
-    ผลคือผู้ฟังได้ยิน "เงียบสั้นๆ" แทน "เสียงแตก" ตอนมีคนเริ่มพูด
+    ตอนมีคนเริ่มพูดใหม่หลังเงียบไปนาน (decoder ตัวใหม่ถูกสร้าง) แพ็กเก็ตแรกสุดมักเป็นขยะ/ไม่สมบูรณ์
+    เลยข้ามแพ็กเก็ตแรกไปเฉยๆ ก่อนเริ่มป้อนเข้า mixer จริง (แค่ 1 แพ็กเก็ต ~20ms ไม่ใช่ mute ยาว)
+    ส่วนกรณี decode พังกลางประโยค (corrupted stream) มี _patch_voice_recv_resilience() ที่แพตช์
+    decoder/router ให้ข้าม packet เสียแล้วทิ้งไปเงียบๆ แทนการ mute ล่วงหน้าเป็นวินาที ๆ
+    (เดิมเคย mute 250ms ทุกครั้งที่เงียบเกิน 1.5s ซึ่งตัดหัวเสียงทุกประโยคจนฟังดูเหมือนเสียงอัดเทป/ตัดต่อ
+    ไม่ใช่เสียงสด — ตอนนี้ใช้แค่ skip 1 แพ็กเก็ตแรกพอ เพราะการป้องกัน crash จริงๆ อยู่ที่แพตช์ resilience แล้ว)
     """
 
-    WARMUP_SECONDS = 0.25
     SILENCE_RESET_SECONDS = 1.5  # เงียบเกินนี้ = ถือว่าเริ่มพูดใหม่ (decoder ตัวใหม่ถูกสร้างอีกรอบ)
 
     def __init__(self):
@@ -234,10 +235,6 @@ class RelaySink(voice_recv.AudioSink):
             return  # เฟรมแรกของรอบใหม่ ข้ามไปเลย ไม่ป้อนเข้า mixer
 
         self._last_seen[user.id] = now
-
-        if now - first_seen < self.WARMUP_SECONDS:
-            return  # ยังอยู่ในช่วง warm-up เงียบไว้ก่อน กัน corrupted stream หลุดออกไปเป็นเสียงแตก
-
         mixer.feed(user.id, data.pcm)
 
     def cleanup(self):
