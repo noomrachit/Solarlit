@@ -20,6 +20,10 @@ Environment variables ที่ต้องตั้ง:
 - ต้อง invite บอททุกตัวเข้าเซิร์ฟเวอร์เดียวกัน (คนละ token คนละแอป)
 - ต้องมี libopus ติดตั้งในระบบ (ดู nixpacks.toml)
 - จำนวนห้องย่อยที่กระจายพร้อมกันได้ ถูกจำกัดด้วยจำนวนบอทพูดที่ตั้งค่าไว้เท่านั้น
+
+/relay setrole <role> จำกัดให้กระจายเสียงเฉพาะคนที่มีบทบาทนี้ในห้องหลัก — คนอื่นยังพูดคุยในห้องหลัก
+ได้ตามปกติ (ไม่ได้ถูกตัดไมค์/เตะออก) แค่เสียงของเขาจะไม่ถูกป้อนเข้า mixer จึงไม่ถูกส่งต่อไปห้องย่อย
+ใช้ /relay clearrole เพื่อยกเลิกและกลับไปกระจายเสียงทุกคนตามเดิม
 """
 
 import os
@@ -131,6 +135,10 @@ speaker_queues: list = [asyncio.Queue(maxsize=50) for _ in SPEAKER_TOKENS]
 active_speaker_indices: set = set()
 # เก็บว่า index ไหนกำลังเล่นในช่องไหน (ไว้โชว์ /relay status)
 speaker_channel_map: dict = {}
+# ถ้าตั้งค่าไว้ (ไม่ใช่ None) บอทฟังจะกระจายเสียงเฉพาะคนที่มีบทบาทนี้เท่านั้น
+# คนอื่นในห้องหลักยังพูดได้ปกติ ไม่ได้ถูกตัดไมค์ แค่เสียงของเขาจะไม่ถูกป้อนเข้า mixer
+# จึงไม่ถูกส่งต่อไปห้องย่อย (ดู RelaySink.write และ /relay setrole)
+role_filter: dict = {"role_id": None}
 
 # ── บอทตัวที่ 1: ฟังเสียงในห้องหลัก ──
 intents_listener = discord.Intents.default()
@@ -203,13 +211,14 @@ mixer = Mixer()
 class RelaySink(voice_recv.AudioSink):
     """
     รับเสียง PCM ที่ decode แล้วจากทุกคนในห้องหลัก แล้วป้อนเข้า mixer
-    มีระบบ "warm-up mute" — ตอนมีคนเริ่มพูดใหม่ (decoder ตัวใหม่ถูกสร้าง)
-    ช่วงแรกๆ มักเจอ error decode เสียงพัง (corrupted stream) เพราะ decoder ยังไม่เสถียร
-    เลยเงียบเสียงคนนั้นไปก่อนสั้นๆ (WARMUP_SECONDS) รอให้ decoder นิ่งก่อนค่อยปล่อยเสียงเข้าระบบจริง
-    ผลคือผู้ฟังได้ยิน "เงียบสั้นๆ" แทน "เสียงแตก" ตอนมีคนเริ่มพูด
+    ตอนมีคนเริ่มพูดใหม่หลังเงียบไปนาน (decoder ตัวใหม่ถูกสร้าง) แพ็กเก็ตแรกสุดมักเป็นขยะ/ไม่สมบูรณ์
+    เลยข้ามแพ็กเก็ตแรกไปเฉยๆ ก่อนเริ่มป้อนเข้า mixer จริง (แค่ 1 แพ็กเก็ต ~20ms ไม่ใช่ mute ยาว)
+    ส่วนกรณี decode พังกลางประโยค (corrupted stream) มี _patch_voice_recv_resilience() ที่แพตช์
+    decoder/router ให้ข้าม packet เสียแล้วทิ้งไปเงียบๆ แทนการ mute ล่วงหน้าเป็นวินาที ๆ
+    (เดิมเคย mute 250ms ทุกครั้งที่เงียบเกิน 1.5s ซึ่งตัดหัวเสียงทุกประโยคจนฟังดูเหมือนเสียงอัดเทป/ตัดต่อ
+    ไม่ใช่เสียงสด — ตอนนี้ใช้แค่ skip 1 แพ็กเก็ตแรกพอ เพราะการป้องกัน crash จริงๆ อยู่ที่แพตช์ resilience แล้ว)
     """
 
-    WARMUP_SECONDS = 0.25
     SILENCE_RESET_SECONDS = 1.5  # เงียบเกินนี้ = ถือว่าเริ่มพูดใหม่ (decoder ตัวใหม่ถูกสร้างอีกรอบ)
 
     def __init__(self):
@@ -223,6 +232,10 @@ class RelaySink(voice_recv.AudioSink):
         if user is None or user.bot:
             return
 
+        role_id = role_filter["role_id"]
+        if role_id is not None and role_id not in {r.id for r in getattr(user, "roles", ())}:
+            return  # ไม่มีบทบาทที่กำหนด ไม่กระจายเสียงคนนี้ไปห้องย่อย (ยังพูดในห้องหลักได้ปกติ ไม่ได้ตัดไมค์)
+
         now = time.monotonic()
         last_seen = self._last_seen.get(user.id)
         first_seen = self._first_seen.get(user.id)
@@ -234,10 +247,6 @@ class RelaySink(voice_recv.AudioSink):
             return  # เฟรมแรกของรอบใหม่ ข้ามไปเลย ไม่ป้อนเข้า mixer
 
         self._last_seen[user.id] = now
-
-        if now - first_seen < self.WARMUP_SECONDS:
-            return  # ยังอยู่ในช่วง warm-up เงียบไว้ก่อน กัน corrupted stream หลุดออกไปเป็นเสียงแตก
-
         mixer.feed(user.id, data.pcm)
 
     def cleanup(self):
@@ -506,6 +515,28 @@ async def relay_stop(interaction: discord.Interaction):
     await interaction.followup.send("🛑 หยุดถ่ายทอดเสียงทั้งหมดแล้ว", ephemeral=True)
 
 
+@relay_group.command(
+    name="setrole",
+    description="กระจายเสียงเฉพาะคนที่มีบทบาทนี้ในห้องหลัก (คนอื่นพูดในห้องได้ปกติ แค่ไม่ถูกส่งไปห้องย่อย)"
+)
+@has_relay_perms()
+@app_commands.describe(role="บทบาทที่อนุญาตให้กระจายเสียงไปห้องย่อย")
+async def relay_setrole(interaction: discord.Interaction, role: discord.Role):
+    role_filter["role_id"] = role.id
+    await interaction.response.send_message(
+        f"🎙️ ตั้งค่าแล้ว: กระจายเสียงเฉพาะคนที่มีบทบาท {role.mention} เท่านั้น\n"
+        f"คนที่ไม่มีบทบาทนี้ยังพูดในห้องหลักได้ตามปกติ (ไม่ได้ปิดไมค์ใคร) แค่เสียงจะไม่ถูกส่งไปห้องย่อย",
+        ephemeral=True
+    )
+
+
+@relay_group.command(name="clearrole", description="ยกเลิกการกรองบทบาท กลับไปกระจายเสียงทุกคนในห้องหลักเหมือนเดิม")
+@has_relay_perms()
+async def relay_clearrole(interaction: discord.Interaction):
+    role_filter["role_id"] = None
+    await interaction.response.send_message("🔓 ยกเลิกการกรองบทบาทแล้ว กระจายเสียงทุกคนในห้องหลักตามปกติ", ephemeral=True)
+
+
 @relay_group.command(name="bindlistener", description="ผูกบอทฟังให้เข้า/ออกห้องหลักอัตโนมัติตามความเคลื่อนไหวของห้อง")
 @has_relay_perms()
 @app_commands.describe(channel="ห้องหลักที่จะผูกไว้ (Voice หรือ Stage Channel) — เข้าเมื่อมีคนเข้าห้อง ออกเมื่อห้องว่าง")
@@ -556,6 +587,10 @@ async def relay_status(interaction: discord.Interaction):
     for idx, binding in speaker_bindings.items():
         ch = interaction.guild.get_channel(binding["channel_id"])
         lines.append(f"🔗 บอทพูดตัวที่ {idx + 1} ผูกกับห้อง {ch.mention if ch else '?'} (เข้า-ออกตามคนในห้อง)")
+
+    if role_filter["role_id"]:
+        role = interaction.guild.get_role(role_filter["role_id"])
+        lines.append(f"🎙️ กรองบทบาท: กระจายเสียงเฉพาะ {role.mention if role else '?'}")
 
     if lines:
         lines.append("")
