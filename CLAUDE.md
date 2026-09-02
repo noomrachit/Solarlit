@@ -149,3 +149,9 @@ Each Python service reads its own `.env` (see root `.env.example` for the bot's 
   often need to land in both.
 - Bot-facing code, comments, and command descriptions are predominantly in Thai; match that convention
   when touching `bot/`, `voicebot/`, `voicerelay/`, `website/`, and `SETUP.md`.
+
+## Confirm before editing or saving files
+
+Before writing to, editing, or saving any file in this repository, always ask the user for
+explicit confirmation first — describe what will change and wait for approval before calling
+Write/Edit. This applies on every session, every time, not just once.
