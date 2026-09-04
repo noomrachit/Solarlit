@@ -103,6 +103,12 @@ async def init_db():
                 intro_channel BIGINT,
                 log_channel BIGINT
             );
+
+            CREATE TABLE IF NOT EXISTS player_board (
+                guild_id BIGINT PRIMARY KEY,
+                channel_id BIGINT NOT NULL,
+                message_id BIGINT NOT NULL
+            );
             """
         )
 

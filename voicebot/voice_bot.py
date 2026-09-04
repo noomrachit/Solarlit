@@ -17,6 +17,7 @@ import matplotlib
 matplotlib.use("Agg")  # ไม่ต้องใช้ GUI backend เพราะรันบนเซิร์ฟเวอร์
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+import matplotlib.font_manager as fm
 
 import database as db
 # หมายเหตุ: import access as billing_access ถูกลบออก — ไม่มีไฟล์ access.py อยู่จริงใน repo นี้เลย
@@ -29,6 +30,25 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(
 log = logging.getLogger("voice-tracker-bot")
 
 BANGKOK_TZ = ZoneInfo("Asia/Bangkok")
+
+
+def _configure_thai_font():
+    """
+    ฟอนต์ default ของ matplotlib (DejaVu Sans) ไม่มี glyph ภาษาไทย — ข้อความไทยในกราฟ (/voice graph)
+    และรูปกระดานรายชื่อ (/setup-playerboard) จะขึ้นเป็นกล่องว่างถ้าไม่สลับฟอนต์ก่อน
+    เลือกฟอนต์ไทยตัวแรกที่ระบบมีจริง (เช่นแพ็กเกจ TLWG) ถ้าไม่มีเลยก็ปล่อยผ่าน ไม่ crash แค่ยังขึ้นกล่องว่างเหมือนเดิม
+    """
+    thai_font_names = ["TH Sarabun New", "Noto Sans Thai", "Garuda", "Loma", "Waree", "Norasi", "Kinnari", "Sawasdee", "Purisa", "Umpush"]
+    available = {f.name for f in fm.fontManager.ttflist}
+    for name in thai_font_names:
+        if name in available:
+            plt.rcParams["font.family"] = name
+            log.info(f"ใช้ฟอนต์ '{name}' สำหรับข้อความไทยในกราฟ/รูปภาพ")
+            return
+    log.warning("ไม่พบฟอนต์ที่รองรับภาษาไทยในระบบ — ข้อความไทยในกราฟ/รูปภาพ (/voice graph, /setup-playerboard) อาจขึ้นเป็นกล่องว่าง")
+
+
+_configure_thai_font()
 
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 if not TOKEN:
@@ -589,6 +609,80 @@ async def _post_profile_embed(interaction: discord.Interaction):
             log.error(f"โพสต์ Embed แนะนำตัวไปห้อง {channel_id} ไม่สำเร็จ: {e}")
 
 
+def _class_color(guild: discord.Guild, character_class: str) -> tuple:
+    """สี role อาชีพจริงในดิส (RGB 0-1) — ใช้ role ที่ตั้งผ่าน /setup-jobs เป็นแหล่งสี ไม่ hardcode อาชีพ"""
+    role = discord.utils.get(guild.roles, name=character_class)
+    if role and role.color.value != 0:
+        return (role.color.r / 255, role.color.g / 255, role.color.b / 255)
+    return (0.6, 0.6, 0.6)  # เทา — เผื่อ role ถูกลบไปแล้วหรือไม่ได้ตั้งสีไว้
+
+
+def _render_player_board_image(guild: discord.Guild, rows: list) -> io.BytesIO:
+    """
+    วาดตารางรายชื่อสมาชิก (ชื่อในเกม / ชื่อในดิส / อาชีพ) เป็นรูปภาพ สีต่อแถวอิงจากสี role อาชีพจริงในดิส
+    เขียนแยกจาก refresh_player_board ไว้ เผื่ออนาคตจะเพิ่มคอลัมน์อื่น (เช่น เช็คชื่อ WOE รายสัปดาห์) ทีหลัง
+    """
+    headers = ["ชื่อในเกม", "ชื่อในดิส", "อาชีพ"]
+    table_data = [[r["in_game_name"], r["discord_name"], r["character_class"]] for r in rows]
+
+    fig_height = 0.6 + 0.5 * (len(rows) + 1)
+    fig, ax = plt.subplots(figsize=(8, fig_height))
+    ax.axis("off")
+
+    table = ax.table(cellText=table_data, colLabels=headers, cellLoc="center", loc="center")
+    table.auto_set_font_size(False)
+    table.set_fontsize(11)
+    table.auto_set_column_width(col=list(range(len(headers))))
+    table.scale(1, 1.8)
+
+    for col in range(len(headers)):
+        cell = table[0, col]
+        cell.set_facecolor((0.85, 0.45, 0.25))
+        cell.set_text_props(weight="bold", color="white")
+
+    for i, r in enumerate(rows, start=1):
+        color = _class_color(guild, r["character_class"])
+        light = tuple(c * 0.35 + 0.65 for c in color)
+        table[i, 0].set_facecolor(light)
+        table[i, 1].set_facecolor(light)
+        table[i, 2].set_facecolor(color)
+        table[i, 2].set_text_props(weight="bold", color="white")
+
+    fig.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
+async def refresh_player_board(guild: discord.Guild):
+    """
+    อัปเดตรูปกระดานรายชื่อสมาชิกที่ตั้งไว้ผ่าน /setup-playerboard (ถ้ามี) — เรียกทุกครั้งที่ player_profiles
+    เปลี่ยน (แนะนำตัวใหม่ / แก้ไข / ถูกลบ) ถ้ายังไม่เคยตั้งกระดานไว้ ก็ข้ามไปเงียบๆ
+    """
+    pool = await db.get_pool()
+    board_row = await pool.fetchrow("SELECT channel_id, message_id FROM player_board WHERE guild_id = $1", guild.id)
+    if not board_row:
+        return
+    channel = guild.get_channel(board_row["channel_id"])
+    if channel is None:
+        return
+
+    rows = await pool.fetch("SELECT * FROM player_profiles WHERE guild_id = $1 ORDER BY in_game_name", guild.id)
+    try:
+        message = await channel.fetch_message(board_row["message_id"])
+        if rows:
+            img = _render_player_board_image(guild, rows)
+            await message.edit(content=None, attachments=[discord.File(img, filename="player_board.png")])
+        else:
+            await message.edit(content="ยังไม่มีใครแนะนำตัวเลย", attachments=[])
+    except discord.NotFound:
+        log.warning(f"หาข้อความกระดานรายชื่อสมาชิกของ guild {guild.id} ไม่เจอ (อาจถูกลบไปแล้ว) — ต้องรัน /setup-playerboard ใหม่")
+    except Exception as e:
+        log.error(f"อัปเดตกระดานรายชื่อสมาชิกไม่สำเร็จ: {e}")
+
+
 class IntroductionModal(discord.ui.Modal, title="แนะนำตัวผู้เล่น"):
     in_game_name = discord.ui.TextInput(label="ชื่อในเกม", placeholder="เช่น RachitTH", max_length=100)
 
@@ -622,6 +716,7 @@ class IntroductionModal(discord.ui.Modal, title="แนะนำตัวผู�
         await _apply_class_role(interaction, self.class_role_id)
         await interaction.response.send_message("✅ แนะนำตัวสำเร็จแล้ว!", ephemeral=True)
         await _post_profile_embed(interaction)
+        await refresh_player_board(interaction.guild)
 
 
 class EditProfileModal(discord.ui.Modal, title="แก้ไขข้อมูลแนะนำตัว"):
@@ -647,6 +742,7 @@ class EditProfileModal(discord.ui.Modal, title="แก้ไขข้อมู�
         )
         await _apply_class_role(interaction, self.class_role_id)
         await interaction.response.send_message("✅ แก้ไขข้อมูลเรียบร้อยแล้ว", ephemeral=True)
+        await refresh_player_board(interaction.guild)
 
 
 class ClassSelectView(discord.ui.View):
@@ -873,6 +969,38 @@ async def player_remove(interaction: discord.Interaction, member: discord.Member
         log.error(f"ถอด role อาชีพของ {member.id} ไม่สำเร็จ: {e}")
 
     await interaction.response.send_message(f"🗑️ ลบข้อมูลแนะนำตัวของ {member.mention} แล้ว", ephemeral=True)
+    await refresh_player_board(interaction.guild)
+
+
+@tree.command(name="setup-playerboard", description="ตั้งค่ากระดานรายชื่อสมาชิก (ชื่อในเกม/ชื่อในดิส/อาชีพ) แบบรูปภาพในห้องที่เลือก")
+@has_mod_perms()
+@app_commands.describe(channel="ห้องที่จะโพสต์/ปักหมุดกระดานรายชื่อสมาชิก")
+async def setup_playerboard(interaction: discord.Interaction, channel: discord.TextChannel):
+    await interaction.response.defer(ephemeral=True)
+    pool = await db.get_pool()
+    rows = await pool.fetch("SELECT * FROM player_profiles WHERE guild_id = $1 ORDER BY in_game_name", interaction.guild.id)
+
+    if rows:
+        img = _render_player_board_image(interaction.guild, rows)
+        message = await channel.send(file=discord.File(img, filename="player_board.png"))
+    else:
+        message = await channel.send("ยังไม่มีใครแนะนำตัวเลย")
+
+    try:
+        await message.pin()
+    except Exception:
+        pass  # ไม่มีสิทธิ์ปักหมุดก็ไม่เป็นไร โพสต์ไว้เฉยๆ ยังใช้ได้
+
+    await pool.execute("""
+        INSERT INTO player_board (guild_id, channel_id, message_id) VALUES ($1, $2, $3)
+        ON CONFLICT (guild_id) DO UPDATE SET channel_id = $2, message_id = $3
+    """, interaction.guild.id, channel.id, message.id)
+
+    await interaction.followup.send(
+        f"ตั้งกระดานรายชื่อสมาชิกที่ {channel.mention} เรียบร้อยแล้ว "
+        f"จะอัปเดตอัตโนมัติทุกครั้งที่มีคนแนะนำตัว/แก้ไข/ถูกลบข้อมูล",
+        ephemeral=True
+    )
 
 
 # Ping / Help
@@ -902,6 +1030,7 @@ async def help_cmd(interaction: discord.Interaction):
     embed.add_field(name="/player-search", value="ค้นหาผู้เล่นจากชื่อในเกมหรือชื่อในดิส (แอดมิน)", inline=False)
     embed.add_field(name="/player-list", value="ดูตารางรายชื่อผู้เล่นที่แนะนำตัวไว้ทั้งหมด (แอดมิน)", inline=False)
     embed.add_field(name="/player-remove", value="ลบข้อมูลแนะนำตัวของสมาชิก (แอดมิน)", inline=False)
+    embed.add_field(name="/setup-playerboard", value="ตั้งกระดานรายชื่อสมาชิกแบบรูปภาพ อัปเดตอัตโนมัติ (แอดมิน)", inline=False)
     embed.add_field(name="/ping", value="ตรวจสอบสถานะบอท", inline=False)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
