@@ -515,8 +515,38 @@ async def _get_class_options(guild: discord.Guild, current: Optional[str] = None
     for r in rows:
         role = guild.get_role(r["role_id"])
         if role:
-            options.append(discord.SelectOption(label=role.name, value=role.name, default=(role.name == current)))
+            # value เก็บ role_id (ไว้ใช้ติดตั้ง role จริงให้สมาชิกตอน submit) ส่วน label โชว์ชื่อ role
+            options.append(discord.SelectOption(label=role.name, value=str(role.id), default=(role.name == current)))
     return options[:25]  # Discord จำกัดตัวเลือกใน Select ไว้ที่ 25
+
+
+async def _apply_class_role(interaction: discord.Interaction, class_role_id: Optional[int]):
+    """
+    ติดตั้ง role อาชีพที่เลือกให้สมาชิกจริงใน Discord — ถอด role อาชีพอื่นที่เคยมีออกก่อน
+    (เผื่อเปลี่ยนอาชีพตอน /edit-profile) เพื่อให้มี role อาชีพติดตัวได้แค่อันเดียว
+    ต้องการสิทธิ์ Manage Roles และ role ของบอทต้องอยู่สูงกว่า role อาชีพในลำดับชั้น ไม่งั้นจะข้ามแบบเงียบๆ
+    """
+    if class_role_id is None:
+        return
+    role = interaction.guild.get_role(class_role_id)
+    if role is None:
+        return
+    member = interaction.user
+    if not isinstance(member, discord.Member):
+        return
+
+    pool = await db.get_pool()
+    job_role_ids = {r["role_id"] for r in await pool.fetch("SELECT role_id FROM job_roles WHERE guild_id = $1", interaction.guild.id)}
+    try:
+        roles_to_remove = [r for r in member.roles if r.id in job_role_ids and r.id != role.id]
+        if roles_to_remove:
+            await member.remove_roles(*roles_to_remove, reason="เปลี่ยนอาชีพ (ระบบแนะนำตัว)")
+        if role not in member.roles:
+            await member.add_roles(role, reason="เลือกอาชีพ (ระบบแนะนำตัว)")
+    except discord.Forbidden:
+        log.warning(f"ไม่มีสิทธิ์ตั้ง role อาชีพให้ {member.id} (เช็คว่า role บอทอยู่สูงกว่า role อาชีพในลำดับชั้นหรือยัง)")
+    except Exception as e:
+        log.error(f"ตั้ง role อาชีพให้ {member.id} ไม่สำเร็จ: {e}")
 
 
 def _build_profile_embed(row: dict, member: discord.abc.User) -> discord.Embed:
@@ -561,11 +591,11 @@ async def _post_profile_embed(interaction: discord.Interaction):
 
 class IntroductionModal(discord.ui.Modal, title="แนะนำตัวผู้เล่น"):
     in_game_name = discord.ui.TextInput(label="ชื่อในเกม", placeholder="เช่น RachitTH", max_length=100)
-    discord_name = discord.ui.TextInput(label="ชื่อในดิส", placeholder="เช่น Rachit", max_length=100)
 
-    def __init__(self, character_class: str):
+    def __init__(self, character_class: str, class_role_id: Optional[int] = None):
         super().__init__()
         self.character_class = character_class
+        self.class_role_id = class_role_id
 
     async def on_submit(self, interaction: discord.Interaction):
         pool = await db.get_pool()
@@ -579,30 +609,33 @@ class IntroductionModal(discord.ui.Modal, title="แนะนำตัวผู�
             )
             return
 
+        # ใช้ชื่อเล่นในดิส (nickname ในเซิร์ฟเวอร์ ถ้าไม่ได้ตั้งจะ fallback เป็น username) แทนให้พิมพ์เอง
+        discord_name = interaction.user.display_name
         await pool.execute(
             """
             INSERT INTO player_profiles (guild_id, discord_user_id, in_game_name, discord_name, character_class)
             VALUES ($1, $2, $3, $4, $5)
             """,
             interaction.guild.id, interaction.user.id,
-            str(self.in_game_name), str(self.discord_name), self.character_class
+            str(self.in_game_name), discord_name, self.character_class
         )
+        await _apply_class_role(interaction, self.class_role_id)
         await interaction.response.send_message("✅ แนะนำตัวสำเร็จแล้ว!", ephemeral=True)
         await _post_profile_embed(interaction)
 
 
 class EditProfileModal(discord.ui.Modal, title="แก้ไขข้อมูลแนะนำตัว"):
     in_game_name = discord.ui.TextInput(label="ชื่อในเกม", max_length=100)
-    discord_name = discord.ui.TextInput(label="ชื่อในดิส", max_length=100)
 
-    def __init__(self, existing: dict, character_class: str):
+    def __init__(self, existing: dict, character_class: str, class_role_id: Optional[int] = None):
         super().__init__()
         self.character_class = character_class
+        self.class_role_id = class_role_id
         self.in_game_name.default = existing["in_game_name"]
-        self.discord_name.default = existing["discord_name"]
 
     async def on_submit(self, interaction: discord.Interaction):
         pool = await db.get_pool()
+        discord_name = interaction.user.display_name
         await pool.execute(
             """
             UPDATE player_profiles
@@ -610,8 +643,9 @@ class EditProfileModal(discord.ui.Modal, title="แก้ไขข้อมู�
             WHERE guild_id = $1 AND discord_user_id = $2
             """,
             interaction.guild.id, interaction.user.id,
-            str(self.in_game_name), str(self.discord_name), self.character_class
+            str(self.in_game_name), discord_name, self.character_class
         )
+        await _apply_class_role(interaction, self.class_role_id)
         await interaction.response.send_message("✅ แก้ไขข้อมูลเรียบร้อยแล้ว", ephemeral=True)
 
 
@@ -627,11 +661,13 @@ class ClassSelectView(discord.ui.View):
         self.add_item(self.select_item)
 
     async def on_select(self, interaction: discord.Interaction):
-        character_class = self.select_item.values[0]
+        class_role_id = int(self.select_item.values[0])
+        role = interaction.guild.get_role(class_role_id)
+        character_class = role.name if role else "ไม่ทราบ"
         if self.editing:
-            modal = EditProfileModal(existing=self.existing, character_class=character_class)
+            modal = EditProfileModal(existing=self.existing, character_class=character_class, class_role_id=class_role_id)
         else:
-            modal = IntroductionModal(character_class=character_class)
+            modal = IntroductionModal(character_class=character_class, class_role_id=class_role_id)
         await interaction.response.send_modal(modal)
 
 
@@ -648,7 +684,7 @@ class IntroductionBoardView(discord.ui.View):
             )
             return
         await interaction.response.send_message(
-            "① เลือกอาชีพที่เล่นก่อน แล้วจะเปิดฟอร์มให้กรอกชื่อในเกม/ชื่อในดิสต่อ",
+            "① เลือกอาชีพที่เล่นก่อน แล้วจะเปิดฟอร์มให้กรอกชื่อในเกมต่อ (ชื่อในดิสใช้ชื่อเล่นในเซิร์ฟเวอร์นี้ให้อัตโนมัติ)",
             view=ClassSelectView(options), ephemeral=True
         )
 
@@ -749,7 +785,7 @@ async def edit_profile(interaction: discord.Interaction):
         )
         return
     await interaction.response.send_message(
-        "เลือกอาชีพที่เล่น (ค่าปัจจุบันถูกเลือกไว้แล้ว) แล้วจะเปิดฟอร์มให้แก้ชื่อในเกม/ชื่อในดิสต่อ",
+        "เลือกอาชีพที่เล่น (ค่าปัจจุบันถูกเลือกไว้แล้ว) แล้วจะเปิดฟอร์มให้แก้ชื่อในเกมต่อ (ชื่อในดิสใช้ชื่อเล่นในเซิร์ฟเวอร์นี้ให้อัตโนมัติ)",
         view=ClassSelectView(options, editing=True, existing=dict(row)), ephemeral=True
     )
 
@@ -807,6 +843,38 @@ async def player_list(interaction: discord.Interaction):
         await interaction.followup.send(embed=embed, ephemeral=True)
 
 
+@tree.command(name="player-remove", description="ลบข้อมูลแนะนำตัวของสมาชิก (แอดมิน)")
+@has_mod_perms()
+@app_commands.describe(member="สมาชิกที่จะลบข้อมูลแนะนำตัว")
+async def player_remove(interaction: discord.Interaction, member: discord.Member):
+    pool = await db.get_pool()
+    existing = await pool.fetchrow(
+        "SELECT 1 FROM player_profiles WHERE guild_id = $1 AND discord_user_id = $2",
+        interaction.guild.id, member.id
+    )
+    if not existing:
+        await interaction.response.send_message(f"{member.mention} ยังไม่ได้แนะนำตัวไว้", ephemeral=True)
+        return
+
+    await pool.execute(
+        "DELETE FROM player_profiles WHERE guild_id = $1 AND discord_user_id = $2",
+        interaction.guild.id, member.id
+    )
+
+    # ถอด role อาชีพออกด้วย (best-effort — เผื่อบอทไม่มีสิทธิ์ Manage Roles หรือ role อาชีพอยู่สูงกว่าบอทในลำดับชั้น)
+    try:
+        job_role_ids = {r["role_id"] for r in await pool.fetch("SELECT role_id FROM job_roles WHERE guild_id = $1", interaction.guild.id)}
+        roles_to_remove = [r for r in member.roles if r.id in job_role_ids]
+        if roles_to_remove:
+            await member.remove_roles(*roles_to_remove, reason=f"ลบข้อมูลแนะนำตัวโดย {interaction.user}")
+    except discord.Forbidden:
+        log.warning(f"ไม่มีสิทธิ์ถอด role อาชีพของ {member.id} ตอนลบข้อมูลแนะนำตัว")
+    except Exception as e:
+        log.error(f"ถอด role อาชีพของ {member.id} ไม่สำเร็จ: {e}")
+
+    await interaction.response.send_message(f"🗑️ ลบข้อมูลแนะนำตัวของ {member.mention} แล้ว", ephemeral=True)
+
+
 # Ping / Help
 @tree.command(name="ping", description="ตรวจสอบสถานะบอท")
 async def ping_cmd(interaction: discord.Interaction):
@@ -833,6 +901,7 @@ async def help_cmd(interaction: discord.Interaction):
     embed.add_field(name="/edit-profile", value="แก้ไขข้อมูลแนะนำตัวของตัวเอง", inline=False)
     embed.add_field(name="/player-search", value="ค้นหาผู้เล่นจากชื่อในเกมหรือชื่อในดิส (แอดมิน)", inline=False)
     embed.add_field(name="/player-list", value="ดูตารางรายชื่อผู้เล่นที่แนะนำตัวไว้ทั้งหมด (แอดมิน)", inline=False)
+    embed.add_field(name="/player-remove", value="ลบข้อมูลแนะนำตัวของสมาชิก (แอดมิน)", inline=False)
     embed.add_field(name="/ping", value="ตรวจสอบสถานะบอท", inline=False)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
