@@ -4,7 +4,8 @@ import logging
 import csv
 import io
 from datetime import datetime, timezone
-from typing import Union
+from typing import Optional, Union
+from zoneinfo import ZoneInfo
 
 import discord
 from discord import app_commands
@@ -27,6 +28,8 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 log = logging.getLogger("voice-tracker-bot")
 
+BANGKOK_TZ = ZoneInfo("Asia/Bangkok")
+
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 if not TOKEN:
     raise RuntimeError("DISCORD_BOT_TOKEN is required")
@@ -38,6 +41,11 @@ intents.members = True        # ใช้แสดงชื่อสมาชิ
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
+
+
+@bot.event
+async def setup_hook():
+    bot.add_view(IntroductionBoardView())
 
 # ห้องที่บอทยามติดตามได้ ต้องรวม Stage Channel ด้วย ไม่ใช่แค่ Voice Channel ธรรมดา
 # เพราะห้องถ่ายทอดสด/ห้องหลักของ Voice Relay มักตั้งเป็น Stage Channel (ตามคำแนะนำใน docs.html)
@@ -495,6 +503,258 @@ async def voice_graph(interaction: discord.Interaction, channel: TrackableChanne
 tree.add_command(voice_group)
 
 
+# ─────────────────────────────────────────────
+# Player Introduction Board (กระดานแนะนำตัวผู้เล่น)
+# ─────────────────────────────────────────────
+
+async def _get_class_options(guild: discord.Guild, current: Optional[str] = None) -> list:
+    """ดึง role อาชีพที่แอดมินตั้งไว้ผ่าน /setup-jobs มาเป็นตัวเลือกใน dropdown เลือกอาชีพ"""
+    pool = await db.get_pool()
+    rows = await pool.fetch("SELECT role_id FROM job_roles WHERE guild_id = $1", guild.id)
+    options = []
+    for r in rows:
+        role = guild.get_role(r["role_id"])
+        if role:
+            options.append(discord.SelectOption(label=role.name, value=role.name, default=(role.name == current)))
+    return options[:25]  # Discord จำกัดตัวเลือกใน Select ไว้ที่ 25
+
+
+def _build_profile_embed(row: dict, member: discord.abc.User) -> discord.Embed:
+    embed = discord.Embed(title="🎮 แนะนำตัวผู้เล่น", color=0x57F287)
+    embed.add_field(name="ชื่อในเกม", value=row["in_game_name"], inline=False)
+    embed.add_field(name="ชื่อในดิส", value=row["discord_name"], inline=False)
+    embed.add_field(name="อาชีพที่เล่น", value=row["character_class"], inline=False)
+    embed.add_field(name="ผู้ลงทะเบียน", value=member.mention, inline=False)
+    ts = row["created_at"].astimezone(BANGKOK_TZ)
+    embed.add_field(name="วันที่ลงทะเบียน", value=ts.strftime("%d/%m/%Y %H:%M น."), inline=False)
+    return embed
+
+
+async def _post_profile_embed(interaction: discord.Interaction):
+    """โพสต์ Embed แนะนำตัวลงห้องที่ตั้งไว้ผ่าน /setup-introduction (ถ้ายังไม่ตั้งค่า ก็ข้ามไปเงียบๆ)"""
+    pool = await db.get_pool()
+    settings_row = await pool.fetchrow("SELECT intro_channel FROM intro_settings WHERE guild_id = $1", interaction.guild.id)
+    channel_id = settings_row["intro_channel"] if settings_row else None
+    channel = interaction.guild.get_channel(channel_id) if channel_id else None
+    if channel is None:
+        return
+    row = await pool.fetchrow(
+        "SELECT * FROM player_profiles WHERE guild_id = $1 AND discord_user_id = $2",
+        interaction.guild.id, interaction.user.id
+    )
+    try:
+        await channel.send(embed=_build_profile_embed(row, interaction.user))
+    except Exception as e:
+        log.error(f"โพสต์ Embed แนะนำตัวไม่สำเร็จ: {e}")
+
+
+class IntroductionModal(discord.ui.Modal, title="แนะนำตัวผู้เล่น"):
+    in_game_name = discord.ui.TextInput(label="ชื่อในเกม", placeholder="เช่น RachitTH", max_length=100)
+    discord_name = discord.ui.TextInput(label="ชื่อในดิส", placeholder="เช่น Rachit", max_length=100)
+
+    def __init__(self, character_class: str):
+        super().__init__()
+        self.character_class = character_class
+
+    async def on_submit(self, interaction: discord.Interaction):
+        pool = await db.get_pool()
+        existing = await pool.fetchrow(
+            "SELECT 1 FROM player_profiles WHERE guild_id = $1 AND discord_user_id = $2",
+            interaction.guild.id, interaction.user.id
+        )
+        if existing:
+            await interaction.response.send_message(
+                "คุณเคยแนะนำตัวแล้ว กรุณาใช้คำสั่ง `/edit-profile` เพื่อแก้ไขข้อมูล", ephemeral=True
+            )
+            return
+
+        await pool.execute(
+            """
+            INSERT INTO player_profiles (guild_id, discord_user_id, in_game_name, discord_name, character_class)
+            VALUES ($1, $2, $3, $4, $5)
+            """,
+            interaction.guild.id, interaction.user.id,
+            str(self.in_game_name), str(self.discord_name), self.character_class
+        )
+        await interaction.response.send_message("✅ แนะนำตัวสำเร็จแล้ว!", ephemeral=True)
+        await _post_profile_embed(interaction)
+
+
+class EditProfileModal(discord.ui.Modal, title="แก้ไขข้อมูลแนะนำตัว"):
+    in_game_name = discord.ui.TextInput(label="ชื่อในเกม", max_length=100)
+    discord_name = discord.ui.TextInput(label="ชื่อในดิส", max_length=100)
+
+    def __init__(self, existing: dict, character_class: str):
+        super().__init__()
+        self.character_class = character_class
+        self.in_game_name.default = existing["in_game_name"]
+        self.discord_name.default = existing["discord_name"]
+
+    async def on_submit(self, interaction: discord.Interaction):
+        pool = await db.get_pool()
+        await pool.execute(
+            """
+            UPDATE player_profiles
+            SET in_game_name = $3, discord_name = $4, character_class = $5, updated_at = NOW()
+            WHERE guild_id = $1 AND discord_user_id = $2
+            """,
+            interaction.guild.id, interaction.user.id,
+            str(self.in_game_name), str(self.discord_name), self.character_class
+        )
+        await interaction.response.send_message("✅ แก้ไขข้อมูลเรียบร้อยแล้ว", ephemeral=True)
+
+
+class ClassSelectView(discord.ui.View):
+    """dropdown เลือกอาชีพก่อนเปิด Modal (Modal ใส่ select menu ไม่ได้ ต้องแยกเป็น 2 ขั้นตอน)"""
+
+    def __init__(self, options: list, *, editing: bool = False, existing: Optional[dict] = None):
+        super().__init__(timeout=180)
+        self.editing = editing
+        self.existing = existing
+        self.select_item = discord.ui.Select(placeholder="เลือกอาชีพที่เล่น", options=options)
+        self.select_item.callback = self.on_select
+        self.add_item(self.select_item)
+
+    async def on_select(self, interaction: discord.Interaction):
+        character_class = self.select_item.values[0]
+        if self.editing:
+            modal = EditProfileModal(existing=self.existing, character_class=character_class)
+        else:
+            modal = IntroductionModal(character_class=character_class)
+        await interaction.response.send_modal(modal)
+
+
+class IntroductionBoardView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="📝 แนะนำตัว", style=discord.ButtonStyle.primary, custom_id="intro_board_open")
+    async def open_form(self, interaction: discord.Interaction, button: discord.ui.Button):
+        options = await _get_class_options(interaction.guild)
+        if not options:
+            await interaction.response.send_message(
+                "ยังไม่ได้ตั้งค่า Role อาชีพ — แจ้งแอดมินให้รัน `/setup-jobs` ก่อน", ephemeral=True
+            )
+            return
+        await interaction.response.send_message(
+            "① เลือกอาชีพที่เล่นก่อน แล้วจะเปิดฟอร์มให้กรอกชื่อในเกม/ชื่อในดิสต่อ",
+            view=ClassSelectView(options), ephemeral=True
+        )
+
+
+class JobRolesSelectView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=180)
+
+    @discord.ui.select(cls=discord.ui.RoleSelect, placeholder="เลือก Role อาชีพทั้งหมด (สูงสุด 25)",
+                        min_values=1, max_values=25)
+    async def select_roles(self, interaction: discord.Interaction, select: discord.ui.RoleSelect):
+        pool = await db.get_pool()
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute("DELETE FROM job_roles WHERE guild_id = $1", interaction.guild.id)
+                await conn.executemany(
+                    "INSERT INTO job_roles (guild_id, role_id) VALUES ($1, $2)",
+                    [(interaction.guild.id, r.id) for r in select.values]
+                )
+        await interaction.response.edit_message(
+            content=f"✅ ตั้งค่า Role อาชีพแล้ว ({len(select.values)} อาชีพ): "
+                    + ", ".join(r.name for r in select.values),
+            view=None
+        )
+
+
+@tree.command(name="setup-jobs", description="ตั้งค่า Role อาชีพที่จะให้สมาชิกเลือกตอนแนะนำตัว")
+@has_mod_perms()
+async def setup_jobs(interaction: discord.Interaction):
+    await interaction.response.send_message(
+        "เลือก Role อาชีพทั้งหมดในเซิร์ฟเวอร์ (จะแทนที่รายการเดิมทั้งหมด):",
+        view=JobRolesSelectView(), ephemeral=True
+    )
+
+
+@tree.command(name="setup-introduction", description="ตั้งค่ากระดานแนะนำตัวผู้เล่นในห้องที่เลือก")
+@has_mod_perms()
+@app_commands.describe(channel="ห้องที่จะโพสต์กระดานแนะนำตัวและ Embed แนะนำตัวของสมาชิก")
+async def setup_introduction(interaction: discord.Interaction, channel: discord.TextChannel):
+    pool = await db.get_pool()
+    await pool.execute("""
+        INSERT INTO intro_settings (guild_id, intro_channel) VALUES ($1, $2)
+        ON CONFLICT (guild_id) DO UPDATE SET intro_channel = $2
+    """, interaction.guild.id, channel.id)
+
+    embed = discord.Embed(
+        title="🎮 กระดานแนะนำตัวผู้เล่น",
+        description="กดปุ่มด้านล่างเพื่อแนะนำตัวกับสมาชิกในกิลด์\n"
+                     "กรุณากรอกชื่อในเกม ชื่อใน Discord และอาชีพที่เล่นให้ครบถ้วน",
+        color=0xFEE75C
+    )
+    await channel.send(embed=embed, view=IntroductionBoardView())
+    await interaction.response.send_message(f"ตั้งกระดานแนะนำตัวที่ {channel.mention} เรียบร้อยแล้ว", ephemeral=True)
+
+
+@tree.command(name="my-profile", description="ดูข้อมูลแนะนำตัวของตัวเอง")
+async def my_profile(interaction: discord.Interaction):
+    pool = await db.get_pool()
+    row = await pool.fetchrow(
+        "SELECT * FROM player_profiles WHERE guild_id = $1 AND discord_user_id = $2",
+        interaction.guild.id, interaction.user.id
+    )
+    if not row:
+        await interaction.response.send_message(
+            "คุณยังไม่ได้แนะนำตัว กดปุ่ม 📝 แนะนำตัว ที่กระดานแนะนำตัวก่อน", ephemeral=True
+        )
+        return
+    await interaction.response.send_message(embed=_build_profile_embed(row, interaction.user), ephemeral=True)
+
+
+@tree.command(name="edit-profile", description="แก้ไขข้อมูลแนะนำตัวของตัวเอง")
+async def edit_profile(interaction: discord.Interaction):
+    pool = await db.get_pool()
+    row = await pool.fetchrow(
+        "SELECT * FROM player_profiles WHERE guild_id = $1 AND discord_user_id = $2",
+        interaction.guild.id, interaction.user.id
+    )
+    if not row:
+        await interaction.response.send_message(
+            "คุณยังไม่ได้แนะนำตัว กดปุ่ม 📝 แนะนำตัว ที่กระดานแนะนำตัวก่อน", ephemeral=True
+        )
+        return
+    options = await _get_class_options(interaction.guild, current=row["character_class"])
+    if not options:
+        await interaction.response.send_message(
+            "ยังไม่ได้ตั้งค่า Role อาชีพ — แจ้งแอดมินให้รัน `/setup-jobs` ก่อน", ephemeral=True
+        )
+        return
+    await interaction.response.send_message(
+        "เลือกอาชีพที่เล่น (ค่าปัจจุบันถูกเลือกไว้แล้ว) แล้วจะเปิดฟอร์มให้แก้ชื่อในเกม/ชื่อในดิสต่อ",
+        view=ClassSelectView(options, editing=True, existing=dict(row)), ephemeral=True
+    )
+
+
+@tree.command(name="player-search", description="ค้นหาผู้เล่นจากชื่อในเกมหรือชื่อในดิส (แอดมิน)")
+@has_mod_perms()
+@app_commands.describe(query="ชื่อในเกมหรือชื่อในดิส (ค้นแบบบางส่วนได้)")
+async def player_search(interaction: discord.Interaction, query: str):
+    pool = await db.get_pool()
+    rows = await pool.fetch("""
+        SELECT * FROM player_profiles
+        WHERE guild_id = $1 AND (in_game_name ILIKE $2 OR discord_name ILIKE $2)
+        ORDER BY in_game_name LIMIT 15
+    """, interaction.guild.id, f"%{query}%")
+
+    if not rows:
+        await interaction.response.send_message("ไม่พบผู้เล่นที่ตรงกับคำค้นหา", ephemeral=True)
+        return
+
+    lines = [
+        f"• **{r['in_game_name']}** (ดิส: {r['discord_name']}, อาชีพ: {r['character_class']}) — <@{r['discord_user_id']}>"
+        for r in rows
+    ]
+    embed = discord.Embed(title=f"🔍 ผลค้นหา: {query}", description="\n".join(lines), color=0x5865F2)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
 # Ping / Help
 @tree.command(name="ping", description="ตรวจสอบสถานะบอท")
 async def ping_cmd(interaction: discord.Interaction):
@@ -515,6 +775,11 @@ async def help_cmd(interaction: discord.Interaction):
     embed.add_field(name="/voice stats", value="สรุปเวลารวมของแต่ละคนในห้อง (เลือกช่วงวันได้)", inline=False)
     embed.add_field(name="/voice export", value="ส่งออกข้อมูลเป็นไฟล์ CSV (เปิดด้วย Excel ได้)", inline=False)
     embed.add_field(name="/voice graph", value="ดูกราฟกิจกรรม (เวลารวมต่อวัน) แบบรูปภาพ", inline=False)
+    embed.add_field(name="/setup-introduction", value="โพสต์กระดานแนะนำตัวผู้เล่นในห้องที่เลือก (แอดมิน)", inline=False)
+    embed.add_field(name="/setup-jobs", value="ตั้งค่า Role อาชีพที่จะให้เลือกตอนแนะนำตัว (แอดมิน)", inline=False)
+    embed.add_field(name="/my-profile", value="ดูข้อมูลแนะนำตัวของตัวเอง", inline=False)
+    embed.add_field(name="/edit-profile", value="แก้ไขข้อมูลแนะนำตัวของตัวเอง", inline=False)
+    embed.add_field(name="/player-search", value="ค้นหาผู้เล่นจากชื่อในเกมหรือชื่อในดิส (แอดมิน)", inline=False)
     embed.add_field(name="/ping", value="ตรวจสอบสถานะบอท", inline=False)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
