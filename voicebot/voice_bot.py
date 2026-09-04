@@ -597,8 +597,9 @@ def _build_profile_embed(row: dict, member: discord.abc.User) -> discord.Embed:
 
 async def _post_profile_embed(interaction: discord.Interaction):
     """
-    โพสต์ Embed แนะนำตัวลงห้องกระดานหลักที่ตั้งไว้ผ่าน /setup-introduction
-    และห้องที่สอง (เช่น #ฐานข้อมูล-ผู้เล่น) ถ้าตั้งค่าไว้ด้วย — ถ้ายังไม่ตั้งค่าห้องไหนเลย ก็ข้ามไปเงียบๆ
+    โพสต์ Embed แนะนำตัว — ถ้าตั้ง log_channel ไว้ (ผ่าน /setup-introduction) จะโพสต์ที่ห้องนั้น
+    ห้องเดียว (แยกจากห้องกระดานปุ่ม ไม่ซ้ำ 2 ห้อง) ถ้าไม่ได้ตั้ง log_channel ไว้ ก็ fallback ไปโพสต์ที่
+    ห้องกระดานปุ่มแทน — ถ้ายังไม่ตั้งค่าห้องไหนเลย ก็ข้ามไปเงียบๆ
     """
     pool = await db.get_pool()
     settings_row = await pool.fetchrow(
@@ -607,21 +608,20 @@ async def _post_profile_embed(interaction: discord.Interaction):
     if not settings_row:
         return
 
+    channel_id = settings_row["log_channel"] or settings_row["intro_channel"]
+    channel = interaction.guild.get_channel(channel_id) if channel_id else None
+    if channel is None:
+        return
+
     row = await pool.fetchrow(
         "SELECT * FROM player_profiles WHERE guild_id = $1 AND discord_user_id = $2",
         interaction.guild.id, interaction.user.id
     )
     embed = _build_profile_embed(row, interaction.user)
-
-    channel_ids = {settings_row["intro_channel"], settings_row["log_channel"]} - {None}
-    for channel_id in channel_ids:
-        channel = interaction.guild.get_channel(channel_id)
-        if channel is None:
-            continue
-        try:
-            await channel.send(embed=embed)
-        except Exception as e:
-            log.error(f"โพสต์ Embed แนะนำตัวไปห้อง {channel_id} ไม่สำเร็จ: {e}")
+    try:
+        await channel.send(embed=embed)
+    except Exception as e:
+        log.error(f"โพสต์ Embed แนะนำตัวไปห้อง {channel_id} ไม่สำเร็จ: {e}")
 
 
 def _class_color(guild: discord.Guild, character_class: str) -> tuple:
@@ -841,7 +841,7 @@ async def setup_jobs(interaction: discord.Interaction):
 @has_mod_perms()
 @app_commands.describe(
     channel="ห้องที่จะโพสต์กระดานแนะนำตัว (ปุ่มกด)",
-    log_channel="ห้องที่สอง (เช่น #ฐานข้อมูล-ผู้เล่น) ที่จะได้รับสำเนา Embed แนะนำตัวทุกครั้งที่มีคนลงทะเบียนด้วย (ไม่บังคับ)"
+    log_channel="ห้องแยกต่างหาก (เช่น #ฐานข้อมูล-ผู้เล่น) สำหรับ Embed แนะนำตัวสำเร็จ — ถ้าตั้งไว้ Embed จะไปห้องนี้แทนห้องกระดานปุ่ม ไม่ซ้ำ 2 ห้อง (ไม่บังคับ)"
 )
 async def setup_introduction(
     interaction: discord.Interaction,
@@ -864,7 +864,7 @@ async def setup_introduction(
 
     msg = f"ตั้งกระดานแนะนำตัวที่ {channel.mention} เรียบร้อยแล้ว"
     if log_channel:
-        msg += f"\nจะส่งสำเนา Embed แนะนำตัวไปที่ {log_channel.mention} ทุกครั้งที่มีคนลงทะเบียนด้วย"
+        msg += f"\nEmbed แนะนำตัวสำเร็จจะไปโพสต์ที่ {log_channel.mention} แทน (ไม่ซ้ำที่ห้องกระดานปุ่ม)"
     await interaction.response.send_message(msg, ephemeral=True)
 
 
