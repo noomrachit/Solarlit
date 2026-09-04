@@ -698,6 +698,11 @@ async def refresh_player_board(guild: discord.Guild):
         log.error(f"อัปเดตกระดานรายชื่อสมาชิกไม่สำเร็จ: {e}")
 
 
+def _format_discord_name(member: discord.abc.User, in_game_name: str) -> str:
+    """ชื่อในดิส = ชื่อเล่นในเซิร์ฟเวอร์ (nickname) ต่อด้วยชื่อในเกมในวงเล็บ เช่น 'หนุ่ม (จ๊ก)'"""
+    return f"{member.display_name} ({in_game_name})"
+
+
 class IntroductionModal(discord.ui.Modal, title="แนะนำตัวผู้เล่น"):
     in_game_name = discord.ui.TextInput(label="ชื่อในเกม", placeholder="เช่น RachitTH", max_length=100)
 
@@ -719,7 +724,8 @@ class IntroductionModal(discord.ui.Modal, title="แนะนำตัวผู�
             return
 
         # ใช้ชื่อเล่นในดิส (nickname ในเซิร์ฟเวอร์ ถ้าไม่ได้ตั้งจะ fallback เป็น username) แทนให้พิมพ์เอง
-        discord_name = interaction.user.display_name
+        # ต่อด้วยชื่อในเกมในวงเล็บ เช่น "หนุ่ม (จ๊ก)" ให้ดูออกง่ายว่าใครในดิสคือใครในเกม
+        discord_name = _format_discord_name(interaction.user, str(self.in_game_name))
         await pool.execute(
             """
             INSERT INTO player_profiles (guild_id, discord_user_id, in_game_name, discord_name, character_class)
@@ -745,7 +751,7 @@ class EditProfileModal(discord.ui.Modal, title="แก้ไขข้อมู�
 
     async def on_submit(self, interaction: discord.Interaction):
         pool = await db.get_pool()
-        discord_name = interaction.user.display_name
+        discord_name = _format_discord_name(interaction.user, str(self.in_game_name))
         await pool.execute(
             """
             UPDATE player_profiles
