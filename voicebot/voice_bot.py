@@ -32,12 +32,27 @@ log = logging.getLogger("voice-tracker-bot")
 BANGKOK_TZ = ZoneInfo("Asia/Bangkok")
 
 
+BUNDLED_THAI_FONT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts", "NotoSansThai.ttf")
+
+
 def _configure_thai_font():
     """
     ฟอนต์ default ของ matplotlib (DejaVu Sans) ไม่มี glyph ภาษาไทย — ข้อความไทยในกราฟ (/voice graph)
     และรูปกระดานรายชื่อ (/setup-playerboard) จะขึ้นเป็นกล่องว่างถ้าไม่สลับฟอนต์ก่อน
-    เลือกฟอนต์ไทยตัวแรกที่ระบบมีจริง (เช่นแพ็กเกจ TLWG) ถ้าไม่มีเลยก็ปล่อยผ่าน ไม่ crash แค่ยังขึ้นกล่องว่างเหมือนเดิม
+    ยืนยันแล้วว่า Railway container ที่ deploy จริงไม่มีฟอนต์ไทยติดตั้งไว้เลย (เช็คจาก log ตอน deploy)
+    เลยแนบฟอนต์ Noto Sans Thai (OFL license, ดู fonts/OFL.txt) มากับ repo เองแทนการพึ่งฟอนต์ระบบที่คุมไม่ได้
+    ถ้าหาไฟล์ที่แนบมาไม่เจอ (เผื่อย้าย/ลบไฟล์ไปในอนาคต) ค่อย fallback ไปหาฟอนต์ไทยที่ระบบอาจมีอยู่แล้วแทน
     """
+    if os.path.isfile(BUNDLED_THAI_FONT):
+        try:
+            fm.fontManager.addfont(BUNDLED_THAI_FONT)
+            font_name = fm.FontProperties(fname=BUNDLED_THAI_FONT).get_name()
+            plt.rcParams["font.family"] = font_name
+            log.info(f"ใช้ฟอนต์ไทยที่แนบมากับ repo ('{font_name}') สำหรับข้อความไทยในกราฟ/รูปภาพ")
+            return
+        except Exception as e:
+            log.warning(f"โหลดฟอนต์ไทยที่แนบมากับ repo ไม่สำเร็จ: {e} — ลองหาฟอนต์ไทยในระบบแทน")
+
     thai_font_names = ["TH Sarabun New", "Noto Sans Thai", "Garuda", "Loma", "Waree", "Norasi", "Kinnari", "Sawasdee", "Purisa", "Umpush"]
     available = {f.name for f in fm.fontManager.ttflist}
     for name in thai_font_names:
