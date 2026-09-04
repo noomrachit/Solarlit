@@ -1706,7 +1706,8 @@ BOT_DASHBOARD = [
         "commands": [
             "/track — add, remove, list",
             "/voice — now, stats, export, graph",
-            "/setup-introduction, /setup-jobs, /my-profile, /edit-profile, /player-search, /player-list",
+            "/setup-introduction, /setup-jobs, /my-profile, /edit-profile",
+            "/player-search, /player-list, /player-remove",
             "/ping, /help",
         ],
     },
