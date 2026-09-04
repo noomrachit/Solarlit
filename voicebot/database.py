@@ -80,5 +80,27 @@ async def init_db():
 
             CREATE INDEX IF NOT EXISTS idx_voice_sessions_guild_channel_joined
                 ON voice_sessions (guild_id, channel_id, joined_at);
+
+            CREATE TABLE IF NOT EXISTS player_profiles (
+                guild_id BIGINT NOT NULL,
+                discord_user_id BIGINT NOT NULL,
+                in_game_name TEXT NOT NULL,
+                discord_name TEXT NOT NULL,
+                character_class TEXT NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ DEFAULT NOW(),
+                PRIMARY KEY (guild_id, discord_user_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS job_roles (
+                guild_id BIGINT NOT NULL,
+                role_id BIGINT NOT NULL,
+                PRIMARY KEY (guild_id, role_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS intro_settings (
+                guild_id BIGINT PRIMARY KEY,
+                intro_channel BIGINT
+            );
             """
         )
