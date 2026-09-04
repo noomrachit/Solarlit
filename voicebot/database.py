@@ -100,7 +100,16 @@ async def init_db():
 
             CREATE TABLE IF NOT EXISTS intro_settings (
                 guild_id BIGINT PRIMARY KEY,
-                intro_channel BIGINT
+                intro_channel BIGINT,
+                log_channel BIGINT
             );
+            """
+        )
+
+        # Migration: ห้องที่สอง (เช่น #ฐานข้อมูล-ผู้เล่น) ที่จะได้รับสำเนา Embed แนะนำตัวทุกครั้งที่มีคนลงทะเบียน
+        # นอกเหนือจากห้องกระดานหลัก (/setup-introduction) — เผื่อตาราง intro_settings ถูกสร้างไปแล้วก่อนมีคอลัมน์นี้
+        await conn.execute(
+            """
+            ALTER TABLE intro_settings ADD COLUMN IF NOT EXISTS log_channel BIGINT;
             """
         )

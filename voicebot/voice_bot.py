@@ -531,21 +531,32 @@ def _build_profile_embed(row: dict, member: discord.abc.User) -> discord.Embed:
 
 
 async def _post_profile_embed(interaction: discord.Interaction):
-    """โพสต์ Embed แนะนำตัวลงห้องที่ตั้งไว้ผ่าน /setup-introduction (ถ้ายังไม่ตั้งค่า ก็ข้ามไปเงียบๆ)"""
+    """
+    โพสต์ Embed แนะนำตัวลงห้องกระดานหลักที่ตั้งไว้ผ่าน /setup-introduction
+    และห้องที่สอง (เช่น #ฐานข้อมูล-ผู้เล่น) ถ้าตั้งค่าไว้ด้วย — ถ้ายังไม่ตั้งค่าห้องไหนเลย ก็ข้ามไปเงียบๆ
+    """
     pool = await db.get_pool()
-    settings_row = await pool.fetchrow("SELECT intro_channel FROM intro_settings WHERE guild_id = $1", interaction.guild.id)
-    channel_id = settings_row["intro_channel"] if settings_row else None
-    channel = interaction.guild.get_channel(channel_id) if channel_id else None
-    if channel is None:
+    settings_row = await pool.fetchrow(
+        "SELECT intro_channel, log_channel FROM intro_settings WHERE guild_id = $1", interaction.guild.id
+    )
+    if not settings_row:
         return
+
     row = await pool.fetchrow(
         "SELECT * FROM player_profiles WHERE guild_id = $1 AND discord_user_id = $2",
         interaction.guild.id, interaction.user.id
     )
-    try:
-        await channel.send(embed=_build_profile_embed(row, interaction.user))
-    except Exception as e:
-        log.error(f"โพสต์ Embed แนะนำตัวไม่สำเร็จ: {e}")
+    embed = _build_profile_embed(row, interaction.user)
+
+    channel_ids = {settings_row["intro_channel"], settings_row["log_channel"]} - {None}
+    for channel_id in channel_ids:
+        channel = interaction.guild.get_channel(channel_id)
+        if channel is None:
+            continue
+        try:
+            await channel.send(embed=embed)
+        except Exception as e:
+            log.error(f"โพสต์ Embed แนะนำตัวไปห้อง {channel_id} ไม่สำเร็จ: {e}")
 
 
 class IntroductionModal(discord.ui.Modal, title="แนะนำตัวผู้เล่น"):
@@ -675,13 +686,20 @@ async def setup_jobs(interaction: discord.Interaction):
 
 @tree.command(name="setup-introduction", description="ตั้งค่ากระดานแนะนำตัวผู้เล่นในห้องที่เลือก")
 @has_mod_perms()
-@app_commands.describe(channel="ห้องที่จะโพสต์กระดานแนะนำตัวและ Embed แนะนำตัวของสมาชิก")
-async def setup_introduction(interaction: discord.Interaction, channel: discord.TextChannel):
+@app_commands.describe(
+    channel="ห้องที่จะโพสต์กระดานแนะนำตัว (ปุ่มกด)",
+    log_channel="ห้องที่สอง (เช่น #ฐานข้อมูล-ผู้เล่น) ที่จะได้รับสำเนา Embed แนะนำตัวทุกครั้งที่มีคนลงทะเบียนด้วย (ไม่บังคับ)"
+)
+async def setup_introduction(
+    interaction: discord.Interaction,
+    channel: discord.TextChannel,
+    log_channel: Optional[discord.TextChannel] = None
+):
     pool = await db.get_pool()
     await pool.execute("""
-        INSERT INTO intro_settings (guild_id, intro_channel) VALUES ($1, $2)
-        ON CONFLICT (guild_id) DO UPDATE SET intro_channel = $2
-    """, interaction.guild.id, channel.id)
+        INSERT INTO intro_settings (guild_id, intro_channel, log_channel) VALUES ($1, $2, $3)
+        ON CONFLICT (guild_id) DO UPDATE SET intro_channel = $2, log_channel = $3
+    """, interaction.guild.id, channel.id, log_channel.id if log_channel else None)
 
     embed = discord.Embed(
         title="🎮 กระดานแนะนำตัวผู้เล่น",
@@ -690,7 +708,11 @@ async def setup_introduction(interaction: discord.Interaction, channel: discord.
         color=0xFEE75C
     )
     await channel.send(embed=embed, view=IntroductionBoardView())
-    await interaction.response.send_message(f"ตั้งกระดานแนะนำตัวที่ {channel.mention} เรียบร้อยแล้ว", ephemeral=True)
+
+    msg = f"ตั้งกระดานแนะนำตัวที่ {channel.mention} เรียบร้อยแล้ว"
+    if log_channel:
+        msg += f"\nจะส่งสำเนา Embed แนะนำตัวไปที่ {log_channel.mention} ทุกครั้งที่มีคนลงทะเบียนด้วย"
+    await interaction.response.send_message(msg, ephemeral=True)
 
 
 @tree.command(name="my-profile", description="ดูข้อมูลแนะนำตัวของตัวเอง")
@@ -755,6 +777,36 @@ async def player_search(interaction: discord.Interaction, query: str):
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
+@tree.command(name="player-list", description="ดูตารางรายชื่อผู้เล่นที่แนะนำตัวไว้ทั้งหมด (แอดมิน)")
+@has_mod_perms()
+async def player_list(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    pool = await db.get_pool()
+    rows = await pool.fetch("""
+        SELECT * FROM player_profiles WHERE guild_id = $1 ORDER BY in_game_name
+    """, interaction.guild.id)
+
+    if not rows:
+        await interaction.followup.send("ยังไม่มีใครแนะนำตัวเลย", ephemeral=True)
+        return
+
+    lines = [
+        f"• **{r['in_game_name']}** (ดิส: {r['discord_name']}, อาชีพ: {r['character_class']}) — <@{r['discord_user_id']}>"
+        for r in rows
+    ]
+
+    # Discord จำกัด embed description ไว้ที่ 4096 ตัวอักษร แบ่งเป็นหลาย embed (หน้าละ 25 คน) กันข้อความยาวเกินส่งไม่ออก
+    PAGE_SIZE = 25
+    pages = [lines[i:i + PAGE_SIZE] for i in range(0, len(lines), PAGE_SIZE)]
+
+    for page_num, page_lines in enumerate(pages, 1):
+        title = f"📋 ตารางผู้เล่น ({len(rows)} คน)"
+        if len(pages) > 1:
+            title += f" — หน้า {page_num}/{len(pages)}"
+        embed = discord.Embed(title=title, description="\n".join(page_lines), color=0x5865F2)
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+
 # Ping / Help
 @tree.command(name="ping", description="ตรวจสอบสถานะบอท")
 async def ping_cmd(interaction: discord.Interaction):
@@ -780,6 +832,7 @@ async def help_cmd(interaction: discord.Interaction):
     embed.add_field(name="/my-profile", value="ดูข้อมูลแนะนำตัวของตัวเอง", inline=False)
     embed.add_field(name="/edit-profile", value="แก้ไขข้อมูลแนะนำตัวของตัวเอง", inline=False)
     embed.add_field(name="/player-search", value="ค้นหาผู้เล่นจากชื่อในเกมหรือชื่อในดิส (แอดมิน)", inline=False)
+    embed.add_field(name="/player-list", value="ดูตารางรายชื่อผู้เล่นที่แนะนำตัวไว้ทั้งหมด (แอดมิน)", inline=False)
     embed.add_field(name="/ping", value="ตรวจสอบสถานะบอท", inline=False)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
