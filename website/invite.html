@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>เชิญบอทเข้าเซิร์ฟเวอร์ — SOLARLIT OPS</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans+Thai:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0a0e13;
+    --panel:#121920;
+    --panel-2:#0e141a;
+    --line:#233039;
+    --line-soft:#1a232b;
+    --text:#e8edf2;
+    --text-dim:#8fa0ab;
+    --text-faint:#4f6068;
+    --amber:#ff9f1c;
+    --amber-dim:#c97e18;
+    --cyan:#3ed8c3;
+    --cyan-dim:#2a9c8d;
+  }
+
+  *{box-sizing:border-box; margin:0; padding:0;}
+
+  body{
+    background:var(--bg);
+    color:var(--text);
+    font-family:'IBM Plex Sans Thai', sans-serif;
+    font-weight:400;
+    line-height:1.7;
+    -webkit-font-smoothing:antialiased;
+  }
+
+  .mono{font-family:'IBM Plex Mono', monospace;}
+
+  .wrap{
+    max-width:1120px;
+    margin:0 auto;
+    padding:0 28px;
+  }
+
+  a{color:inherit; text-decoration:none;}
+
+  /* ============ NAV ============ */
+  nav{
+    position:sticky; top:0; z-index:50;
+    background:rgba(10,14,19,0.85);
+    backdrop-filter:blur(10px);
+    border-bottom:1px solid var(--line-soft);
+  }
+  nav .wrap{
+    display:flex; align-items:center; justify-content:space-between;
+    height:64px;
+  }
+  .brand{
+    display:flex; align-items:center; gap:10px;
+    font-family:'IBM Plex Mono', monospace;
+    font-weight:600;
+    font-size:15px;
+    letter-spacing:0.08em;
+  }
+  .brand .dot{
+    width:8px; height:8px; border-radius:50%;
+    background:var(--cyan);
+    box-shadow:0 0 8px var(--cyan);
+  }
+  .nav-links{display:flex; gap:32px; font-size:14px; color:var(--text-dim);}
+  .nav-links a:hover{color:var(--amber);}
+  @media (max-width:680px){ .nav-links{display:none;} }
+
+  /* ============ HEADER ============ */
+  header.hero{
+    padding:90px 0 60px;
+    border-bottom:1px solid var(--line-soft);
+  }
+  .eyebrow{
+    font-family:'IBM Plex Mono', monospace;
+    font-size:12.5px;
+    letter-spacing:0.18em;
+    color:var(--cyan);
+    display:flex;
+    align-items:center;
+    gap:10px;
+    margin-bottom:24px;
+  }
+  .eyebrow::before{
+    content:"";
+    width:22px; height:1px;
+    background:var(--cyan);
+  }
+  h1{
+    font-family:'IBM Plex Mono', monospace;
+    font-weight:600;
+    font-size:clamp(28px, 4.6vw, 46px);
+    line-height:1.2;
+    max-width:760px;
+    margin-bottom:20px;
+  }
+  header.hero p.lede{
+    font-size:16px;
+    color:var(--text-dim);
+    max-width:600px;
+  }
+
+  /* ============ SECTION ============ */
+  .section{
+    padding:70px 0;
+    border-bottom:1px solid var(--line-soft);
+  }
+  .section-head{margin-bottom:40px;}
+  .section-head h2{
+    font-family:'IBM Plex Mono', monospace;
+    font-size:clamp(20px,2.8vw,28px);
+    font-weight:600;
+    max-width:640px;
+  }
+  .section-head p{
+    color:var(--text-dim);
+    max-width:600px;
+    margin-top:12px;
+    font-size:15px;
+  }
+
+  /* ============ CARDS ============ */
+  .units{
+    display:grid;
+    grid-template-columns:repeat(3, 1fr);
+    gap:20px;
+  }
+  @media (max-width:900px){
+    .units{grid-template-columns:1fr;}
+  }
+  .unit{
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:6px;
+    padding:26px 24px;
+    display:flex;
+    flex-direction:column;
+    transition:border-color 0.2s ease, transform 0.2s ease;
+  }
+  .unit:hover{
+    border-color:var(--amber-dim);
+    transform:translateY(-3px);
+  }
+  .unit-id{
+    font-family:'IBM Plex Mono', monospace;
+    font-size:11px;
+    letter-spacing:0.1em;
+    color:var(--text-faint);
+    margin-bottom:16px;
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+  }
+  .status-pill{
+    display:inline-flex; align-items:center; gap:6px;
+    font-size:10.5px;
+    color:var(--cyan);
+    border:1px solid var(--cyan-dim);
+    padding:3px 8px;
+    border-radius:20px;
+  }
+  .status-pill .dot{
+    width:5px; height:5px; border-radius:50%;
+    background:var(--cyan);
+    box-shadow:0 0 6px var(--cyan);
+  }
+  .unit-name{
+    font-family:'IBM Plex Mono', monospace;
+    font-size:20px;
+    font-weight:700;
+    margin-bottom:6px;
+  }
+  .unit-role{
+    color:var(--text-dim);
+    font-size:13.5px;
+    margin-bottom:18px;
+  }
+  .unit-features{
+    list-style:none;
+    display:flex; flex-direction:column; gap:8px;
+    margin-bottom:22px;
+    flex-grow:1;
+  }
+  .unit-features li{
+    font-size:13px;
+    color:var(--text-dim);
+    display:flex;
+    gap:9px;
+    align-items:baseline;
+  }
+  .unit-features li::before{
+    content:"›";
+    color:var(--amber);
+    font-family:'IBM Plex Mono', monospace;
+    flex-shrink:0;
+  }
+  .btn{
+    font-family:'IBM Plex Mono', monospace;
+    font-size:13px;
+    font-weight:600;
+    letter-spacing:0.03em;
+    padding:12px 20px;
+    border-radius:3px;
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    gap:8px;
+    transition:all 0.15s ease;
+    cursor:pointer;
+    border:1px solid transparent;
+    width:100%;
+  }
+  .btn-primary{
+    background:var(--amber);
+    color:#1a1206;
+  }
+  .btn-primary:hover{
+    background:#ffb347;
+    transform:translateY(-1px);
+  }
+  .btn-ghost{
+    border-color:var(--line);
+    color:var(--text);
+  }
+  .btn-ghost:hover{
+    border-color:var(--text-dim);
+    background:var(--panel-2);
+  }
+
+  /* ============ RELAY GRID ============ */
+  .relay-note{
+    font-family:'IBM Plex Mono', monospace;
+    font-size:12.5px;
+    color:var(--text-faint);
+    background:var(--panel-2);
+    border:1px solid var(--line-soft);
+    border-radius:6px;
+    padding:16px 18px;
+    margin-bottom:32px;
+    line-height:1.8;
+  }
+  .relay-grid{
+    display:grid;
+    grid-template-columns:repeat(3, 1fr);
+    gap:16px;
+  }
+  @media (max-width:900px){
+    .relay-grid{grid-template-columns:repeat(2, 1fr);}
+  }
+  @media (max-width:560px){
+    .relay-grid{grid-template-columns:1fr;}
+  }
+  .relay-card{
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:6px;
+    padding:18px 18px 16px;
+    transition:border-color 0.2s ease;
+  }
+  .relay-card:hover{border-color:var(--amber-dim);}
+  .relay-card.lead{border-color:var(--amber-dim);}
+  .relay-card .label{
+    font-family:'IBM Plex Mono', monospace;
+    font-size:10px;
+    letter-spacing:0.1em;
+    color:var(--text-faint);
+    margin-bottom:6px;
+  }
+  .relay-card .name{
+    font-family:'IBM Plex Mono', monospace;
+    font-size:16px;
+    font-weight:600;
+    color:var(--amber);
+    margin-bottom:14px;
+  }
+
+  footer{padding:60px 0 50px;}
+  .foot-bottom{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    padding-top:32px;
+    font-size:12.5px;
+    color:var(--text-faint);
+    font-family:'IBM Plex Mono', monospace;
+    flex-wrap:wrap;
+    gap:12px;
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <div class="brand"><span class="dot"></span>SOLARLIT&nbsp;OPS</div>
+    <div class="nav-links">
+      <a href="index.html#units">หน่วยบอท</a>
+      <a href="index.html#pricing">ราคา</a>
+      <a href="docs.html">วิธีใช้งาน</a>
+      <a href="invite.html">เชิญบอท</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap">
+    <div class="eyebrow">BOT DEPLOYMENT // INVITE LINKS</div>
+    <h1>เชิญหน่วยบอทเข้าเซิร์ฟเวอร์ของคุณ</h1>
+    <p class="lede">เลือกบอทที่ต้องการใช้งาน กดปุ่มเพื่อเชิญเข้าเซิร์ฟเวอร์ Discord ของคุณโดยตรง — ทุกลิงก์ขอ permission เท่าที่บอทตัวนั้นใช้งานจริงเท่านั้น</p>
+  </div>
+</header>
+
+<section class="section" id="core-bots">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="eyebrow">01 // บอทหลัก</div>
+      <h2>ใจปู และ ยาม — เชิญเข้าเซิร์ฟเวอร์ได้ทันที</h2>
+      <p>ถ้าบอทอยู่ในเซิร์ฟเวอร์อยู่แล้ว กดลิงก์ซ้ำได้เลย Discord จะอัปเดต permission ให้โดยไม่ต้องเตะบอทออก</p>
+    </div>
+
+    <div class="units">
+      <div class="unit">
+        <div class="unit-id">UNIT-01 · QUEUE / MOD
+          <span class="status-pill"><span class="dot"></span>ONLINE</span>
+        </div>
+        <div class="unit-name">ใจปู</div>
+        <div class="unit-role">ระบบคิว, Breakout Rooms, Moderation</div>
+        <ul class="unit-features">
+          <li>Kick / Ban / Timeout / Manage Roles</li>
+          <li>Manage Channels (สำหรับ /voice, /stage)</li>
+          <li>Send Messages, Embed Links, Manage Messages</li>
+        </ul>
+        <a href="https://discord.com/api/oauth2/authorize?client_id=1531424873518334163&permissions=1099780451414&scope=bot%20applications.commands" target="_blank" rel="noopener" class="btn btn-primary">เชิญ ใจปู →</a>
+      </div>
+
+      <div class="unit">
+        <div class="unit-id">UNIT-02 · SURVEILLANCE
+          <span class="status-pill"><span class="dot"></span>ONLINE</span>
+        </div>
+        <div class="unit-name">ยาม</div>
+        <div class="unit-role">ติดตามกิจกรรมห้องเสียง</div>
+        <ul class="unit-features">
+          <li>View Channel, Send Messages, Embed Links</li>
+          <li>Read Message History, Attach Files</li>
+          <li>Manage Roles (ติดตั้ง role อาชีพอัตโนมัติ)</li>
+        </ul>
+        <a href="https://discord.com/api/oauth2/authorize?client_id=1534824847882850424&permissions=268553216&scope=bot%20applications.commands" target="_blank" rel="noopener" class="btn btn-primary">เชิญ ยาม →</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="relay-bots">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="eyebrow">02 // Voice Relay — บอทฟัง + บอทพูด</div>
+      <h2>ต้องเชิญทุกตัวเข้าเซิร์ฟเวอร์เดียวกัน</h2>
+      <p>หัวหน้า (บอทฟัง) รับเสียงจากห้องบัญชาการ แล้วกระจายผ่านลูกน้องแต่ละตัว — เชิญเฉพาะตัวที่ตรงกับแพ็กเกจที่ใช้ (STARTER ใช้แค่ลูกน้อง 1, STANDARD ใช้ 1-3, PRO ใช้ 1-5)</p>
+    </div>
+
+    <div class="relay-note mono">
+      permission ที่ขอ: View Channel · Connect · Speak · Use Voice Activity — สิทธิ์ขั้นต่ำสำหรับฟัง/พูดในห้องเสียงเท่านั้น
+    </div>
+
+    <div class="relay-grid">
+      <div class="relay-card lead">
+        <div class="label">LISTENER · ห้องบัญชาการ</div>
+        <div class="name">หัวหน้า</div>
+        <a href="https://discord.com/api/oauth2/authorize?client_id=1518332826414612551&permissions=36701184&scope=bot%20applications.commands" target="_blank" rel="noopener" class="btn btn-ghost">เชิญ หัวหน้า</a>
+      </div>
+      <div class="relay-card">
+        <div class="label">SPEAKER 1</div>
+        <div class="name">ลูกน้อง 1</div>
+        <a href="https://discord.com/api/oauth2/authorize?client_id=1536131070418878644&permissions=36701184&scope=bot%20applications.commands" target="_blank" rel="noopener" class="btn btn-ghost">เชิญ ลูกน้อง 1</a>
+      </div>
+      <div class="relay-card">
+        <div class="label">SPEAKER 2</div>
+        <div class="name">ลูกน้อง 2</div>
+        <a href="https://discord.com/api/oauth2/authorize?client_id=1536116226198339664&permissions=36701184&scope=bot%20applications.commands" target="_blank" rel="noopener" class="btn btn-ghost">เชิญ ลูกน้อง 2</a>
+      </div>
+      <div class="relay-card">
+        <div class="label">SPEAKER 3</div>
+        <div class="name">ลูกน้อง 3</div>
+        <a href="https://discord.com/api/oauth2/authorize?client_id=1536116842823688267&permissions=36701184&scope=bot%20applications.commands" target="_blank" rel="noopener" class="btn btn-ghost">เชิญ ลูกน้อง 3</a>
+      </div>
+      <div class="relay-card">
+        <div class="label">SPEAKER 4</div>
+        <div class="name">ลูกน้อง 4</div>
+        <a href="https://discord.com/api/oauth2/authorize?client_id=1536459430139265054&permissions=36701184&scope=bot%20applications.commands" target="_blank" rel="noopener" class="btn btn-ghost">เชิญ ลูกน้อง 4</a>
+      </div>
+      <div class="relay-card">
+        <div class="label">SPEAKER 5</div>
+        <div class="name">ลูกน้อง 5</div>
+        <a href="https://discord.com/api/oauth2/authorize?client_id=1536463316564705361&permissions=36701184&scope=bot%20applications.commands" target="_blank" rel="noopener" class="btn btn-ghost">เชิญ ลูกน้อง 5</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-bottom">
+      <div>SOLARLIT OPS © 2026</div>
+      <div><a href="index.html">← กลับหน้าแรก</a></div>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>
