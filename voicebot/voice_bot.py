@@ -698,6 +698,11 @@ async def refresh_player_board(guild: discord.Guild):
         log.error(f"อัปเดตกระดานรายชื่อสมาชิกไม่สำเร็จ: {e}")
 
 
+def _format_discord_name(member: discord.abc.User, in_game_name: str) -> str:
+    """ชื่อในดิส = ชื่อเล่นในเซิร์ฟเวอร์ (nickname) ต่อด้วยชื่อในเกมในวงเล็บ เช่น 'หนุ่ม (จ๊ก)'"""
+    return f"{member.display_name} ({in_game_name})"
+
+
 class IntroductionModal(discord.ui.Modal, title="แนะนำตัวผู้เล่น"):
     in_game_name = discord.ui.TextInput(label="ชื่อในเกม", placeholder="เช่น RachitTH", max_length=100)
 
@@ -719,7 +724,8 @@ class IntroductionModal(discord.ui.Modal, title="แนะนำตัวผู�
             return
 
         # ใช้ชื่อเล่นในดิส (nickname ในเซิร์ฟเวอร์ ถ้าไม่ได้ตั้งจะ fallback เป็น username) แทนให้พิมพ์เอง
-        discord_name = interaction.user.display_name
+        # ต่อด้วยชื่อในเกมในวงเล็บ เช่น "หนุ่ม (จ๊ก)" ให้ดูออกง่ายว่าใครในดิสคือใครในเกม
+        discord_name = _format_discord_name(interaction.user, str(self.in_game_name))
         await pool.execute(
             """
             INSERT INTO player_profiles (guild_id, discord_user_id, in_game_name, discord_name, character_class)
@@ -745,7 +751,7 @@ class EditProfileModal(discord.ui.Modal, title="แก้ไขข้อมู�
 
     async def on_submit(self, interaction: discord.Interaction):
         pool = await db.get_pool()
-        discord_name = interaction.user.display_name
+        discord_name = _format_discord_name(interaction.user, str(self.in_game_name))
         await pool.execute(
             """
             UPDATE player_profiles
@@ -1018,6 +1024,33 @@ async def setup_playerboard(interaction: discord.Interaction, channel: discord.T
     )
 
 
+# Invite
+@tree.command(name="invite", description="รับลิงก์เชิญบอทเข้าเซิร์ฟเวอร์ (พร้อม permission ครบ รวม Manage Roles)")
+async def invite_cmd(interaction: discord.Interaction):
+    perms = discord.Permissions(
+        view_channel=True,
+        send_messages=True,
+        embed_links=True,
+        attach_files=True,
+        read_message_history=True,
+        manage_roles=True,  # จำเป็นสำหรับติดตั้ง role อาชีพให้สมาชิกอัตโนมัติตอนแนะนำตัว/edit-profile
+    )
+    url = discord.utils.oauth_url(
+        client_id=str(bot.user.id),
+        permissions=perms,
+        scopes=("bot", "applications.commands"),
+    )
+    embed = discord.Embed(title="เชิญบอทยามเข้าเซิร์ฟเวอร์", color=0x5865F2)
+    embed.description = f"[คลิกที่นี่เพื่อเชิญบอท]({url})"
+    embed.add_field(name="Permissions ที่ขอ", value=(
+        "View Channel • Send Messages\n"
+        "Embed Links • Attach Files • Read History\n"
+        "Manage Roles (สำหรับติดตั้ง role อาชีพให้สมาชิก)"
+    ), inline=False)
+    embed.set_footer(text="ถ้าบอทอยู่ในเซิร์ฟเวอร์นี้แล้ว กดลิงก์นี้ซ้ำได้เลย — Discord จะอัปเดต permission ให้โดยไม่ต้องเตะบอทออก")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
 # Ping / Help
 @tree.command(name="ping", description="ตรวจสอบสถานะบอท")
 async def ping_cmd(interaction: discord.Interaction):
@@ -1046,6 +1079,7 @@ async def help_cmd(interaction: discord.Interaction):
     embed.add_field(name="/player-list", value="ดูตารางรายชื่อผู้เล่นที่แนะนำตัวไว้ทั้งหมด (แอดมิน)", inline=False)
     embed.add_field(name="/player-remove", value="ลบข้อมูลแนะนำตัวของสมาชิก (แอดมิน)", inline=False)
     embed.add_field(name="/setup-playerboard", value="ตั้งกระดานรายชื่อสมาชิกแบบรูปภาพ อัปเดตอัตโนมัติ (แอดมิน)", inline=False)
+    embed.add_field(name="/invite", value="รับลิงก์เชิญบอทพร้อม permission ครบ (รวม Manage Roles)", inline=False)
     embed.add_field(name="/ping", value="ตรวจสอบสถานะบอท", inline=False)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
