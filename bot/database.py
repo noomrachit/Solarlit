@@ -145,23 +145,6 @@ async def init_db():
                 owner_ids BIGINT[] DEFAULT '{}',
                 created_at TIMESTAMPTZ DEFAULT NOW()
             );
-
-            CREATE TABLE IF NOT EXISTS player_profiles (
-                guild_id BIGINT NOT NULL,
-                discord_user_id BIGINT NOT NULL,
-                in_game_name TEXT NOT NULL,
-                discord_name TEXT NOT NULL,
-                character_class TEXT NOT NULL,
-                created_at TIMESTAMPTZ DEFAULT NOW(),
-                updated_at TIMESTAMPTZ DEFAULT NOW(),
-                PRIMARY KEY (guild_id, discord_user_id)
-            );
-
-            CREATE TABLE IF NOT EXISTS job_roles (
-                guild_id BIGINT NOT NULL,
-                role_id BIGINT NOT NULL,
-                PRIMARY KEY (guild_id, role_id)
-            );
             """
         )
 
@@ -191,12 +174,5 @@ async def init_db():
         await conn.execute(
             """
             ALTER TABLE settings ADD COLUMN IF NOT EXISTS dashboard_channel BIGINT;
-            """
-        )
-
-        # Migration: ห้องที่จะโพสต์กระดานแนะนำตัวผู้เล่น + Embed แนะนำตัวเมื่อสมาชิกกรอกฟอร์ม (/setup-introduction)
-        await conn.execute(
-            """
-            ALTER TABLE settings ADD COLUMN IF NOT EXISTS intro_channel BIGINT;
             """
         )
