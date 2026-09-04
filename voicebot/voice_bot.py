@@ -1024,6 +1024,33 @@ async def setup_playerboard(interaction: discord.Interaction, channel: discord.T
     )
 
 
+# Invite
+@tree.command(name="invite", description="รับลิงก์เชิญบอทเข้าเซิร์ฟเวอร์ (พร้อม permission ครบ รวม Manage Roles)")
+async def invite_cmd(interaction: discord.Interaction):
+    perms = discord.Permissions(
+        view_channel=True,
+        send_messages=True,
+        embed_links=True,
+        attach_files=True,
+        read_message_history=True,
+        manage_roles=True,  # จำเป็นสำหรับติดตั้ง role อาชีพให้สมาชิกอัตโนมัติตอนแนะนำตัว/edit-profile
+    )
+    url = discord.utils.oauth_url(
+        client_id=str(bot.user.id),
+        permissions=perms,
+        scopes=("bot", "applications.commands"),
+    )
+    embed = discord.Embed(title="เชิญบอทยามเข้าเซิร์ฟเวอร์", color=0x5865F2)
+    embed.description = f"[คลิกที่นี่เพื่อเชิญบอท]({url})"
+    embed.add_field(name="Permissions ที่ขอ", value=(
+        "View Channel • Send Messages\n"
+        "Embed Links • Attach Files • Read History\n"
+        "Manage Roles (สำหรับติดตั้ง role อาชีพให้สมาชิก)"
+    ), inline=False)
+    embed.set_footer(text="ถ้าบอทอยู่ในเซิร์ฟเวอร์นี้แล้ว กดลิงก์นี้ซ้ำได้เลย — Discord จะอัปเดต permission ให้โดยไม่ต้องเตะบอทออก")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
 # Ping / Help
 @tree.command(name="ping", description="ตรวจสอบสถานะบอท")
 async def ping_cmd(interaction: discord.Interaction):
@@ -1052,6 +1079,7 @@ async def help_cmd(interaction: discord.Interaction):
     embed.add_field(name="/player-list", value="ดูตารางรายชื่อผู้เล่นที่แนะนำตัวไว้ทั้งหมด (แอดมิน)", inline=False)
     embed.add_field(name="/player-remove", value="ลบข้อมูลแนะนำตัวของสมาชิก (แอดมิน)", inline=False)
     embed.add_field(name="/setup-playerboard", value="ตั้งกระดานรายชื่อสมาชิกแบบรูปภาพ อัปเดตอัตโนมัติ (แอดมิน)", inline=False)
+    embed.add_field(name="/invite", value="รับลิงก์เชิญบอทพร้อม permission ครบ (รวม Manage Roles)", inline=False)
     embed.add_field(name="/ping", value="ตรวจสอบสถานะบอท", inline=False)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
