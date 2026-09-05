@@ -1,3 +1,4 @@
 - [Python virtualenv in Nix](python-venv-nix.md) — use venv + `--no-user` flag; system pip.conf forces --user which breaks in venv
 - [Bot BigInt columns](bot-bigint-columns.md) — guild_id/user_id are BIGINT in Postgres; pass BigInt(str) from Node, results come back as strings
 - [Dashboard auth flow](dashboard-auth.md) — Discord OAuth with express-session; useAuth() hook gates the whole app; /api/auth/* routes are public
+- [Voice Relay speaker bot count](voice-relay-speaker-count.md) — 10 ลูกน้อง confirmed live via deploy logs; sequential SPEAKER_BOT_TOKEN_N loop stops at first empty slot, can silently disable later tokens
