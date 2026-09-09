@@ -747,6 +747,42 @@ async def main():
             tasks.append(_start_bot_safe(sbot, token, f"Speaker {i + 1}"))
         await asyncio.gather(*tasks)
 
+diff --git a/voicerelay/relay_bot.py b/voicerelay/relay_bot.py
+index 5467e54..4de285c 100644
+--- a/voicerelay/relay_bot.py
++++ b/voicerelay/relay_bot.py
+@@ -643,9 +643,24 @@ async def start_health_server():
+     log.info(f"Health server running on port {port}")
+ 
+ 
++def _make_invite_url(bot_user) -> str:
++    perms = discord.Permissions(
++        view_channel=True,
++        connect=True,
++        speak=True,
++        use_voice_activation=True,
++    )
++    return discord.utils.oauth_url(
++        client_id=str(bot_user.id),
++        permissions=perms,
++        scopes=("bot",),
++    )
++
++
+ @listener_bot.event
+ async def on_ready():
+     log.info(f"[Listener] Logged in as {listener_bot.user}")
++    log.info(f"[Listener] Invite link: {_make_invite_url(listener_bot.user)}")
+     try:
+         synced = await tree.sync()
+         log.info(f"[Listener] Synced {len(synced)} commands")
+@@ -686,6 +701,7 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
+ def make_speaker_ready_handler(index: int):
+     async def on_ready():
+         log.info(f"[Speaker {index + 1}] Logged in as {speaker_bots[index].user}")
++        log.info(f"[Speaker {index + 1}] Invite link: {_make_invite_url(speaker_bots[index].user)}")
+     return on_ready
+ 
 
 if __name__ == "__main__":
     asyncio.run(main())
