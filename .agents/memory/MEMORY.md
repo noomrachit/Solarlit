@@ -2,3 +2,4 @@
 - [Bot BigInt columns](bot-bigint-columns.md) — guild_id/user_id are BIGINT in Postgres; pass BigInt(str) from Node, results come back as strings
 - [Dashboard auth flow](dashboard-auth.md) — Discord OAuth with express-session; useAuth() hook gates the whole app; /api/auth/* routes are public
 - [Voice Relay speaker bot count](voice-relay-speaker-count.md) — 10 ลูกน้อง confirmed live via deploy logs; sequential SPEAKER_BOT_TOKEN_N loop stops at first empty slot, can silently disable later tokens
+- [Context optimization workflow](context-optimization-workflow.md) — new session + `/context` baseline, `/mcp` to trim unused servers, keep `CLAUDE.md` lean via progressive disclosure
