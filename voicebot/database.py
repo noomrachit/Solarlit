@@ -109,6 +109,35 @@ async def init_db():
                 channel_id BIGINT NOT NULL,
                 message_id BIGINT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS party_assignments (
+                guild_id BIGINT NOT NULL,
+                discord_user_id BIGINT NOT NULL,
+                group_name TEXT NOT NULL,
+                party_num INTEGER NOT NULL,
+                character_class TEXT NOT NULL,
+                in_game_name TEXT NOT NULL,
+                PRIMARY KEY (guild_id, discord_user_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS party_leave (
+                guild_id BIGINT NOT NULL,
+                discord_user_id BIGINT NOT NULL,
+                left_at TIMESTAMPTZ DEFAULT NOW(),
+                PRIMARY KEY (guild_id, discord_user_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS party_leaveboard (
+                guild_id BIGINT PRIMARY KEY,
+                channel_id BIGINT NOT NULL,
+                message_id BIGINT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS party_rosterboard (
+                guild_id BIGINT PRIMARY KEY,
+                channel_id BIGINT NOT NULL,
+                message_id BIGINT NOT NULL
+            );
             """
         )
 

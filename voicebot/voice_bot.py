@@ -3,6 +3,7 @@ import asyncio
 import logging
 import csv
 import io
+import difflib
 from datetime import datetime, timezone
 from typing import Optional, Union
 from zoneinfo import ZoneInfo
@@ -12,6 +13,9 @@ from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 from aiohttp import web
+
+import pytesseract
+from PIL import Image, ImageOps
 
 import matplotlib
 matplotlib.use("Agg")  # ไม่ต้องใช้ GUI backend เพราะรันบนเซิร์ฟเวอร์
@@ -81,6 +85,7 @@ tree = bot.tree
 @bot.event
 async def setup_hook():
     bot.add_view(IntroductionBoardView())
+    bot.add_view(PartyLeaveBoardView())
 
 # ห้องที่บอทยามติดตามได้ ต้องรวม Stage Channel ด้วย ไม่ใช่แค่ Voice Channel ธรรมดา
 # เพราะห้องถ่ายทอดสด/ห้องหลักของ Voice Relay มักตั้งเป็น Stage Channel (ตามคำแนะนำใน docs.html)
@@ -1024,6 +1029,465 @@ async def setup_playerboard(interaction: discord.Interaction, channel: discord.T
     )
 
 
+# ─────────────────────────────────────────────
+# ระบบจัดปาร์ตี้อัตโนมัติ (ใช้ข้อมูลจาก player_profiles ที่มีอยู่แล้ว ไม่ต้องอ่านรูป)
+# ─────────────────────────────────────────────
+
+PARTY_GROUPS = ["SUN", "Moon", "Luna", "Lux"]     # ลำดับกลุ่มใหญ่ (ตัวสำรองไล่กลับจาก Lux)
+PARTIES_PER_GROUP = 4                              # กลุ่มละ 4 ปาร์ตี้ย่อยตายตัว (รวม 16 ปาร์ตี้ / 96 คน)
+PARTY_SIZE = 6
+PRIEST_CLASS_NAME = "พรีช"                         # ชื่อ role อาชีพ Priest ตามที่ตั้งไว้ใน /setup-jobs
+SUBSTITUTE_PRIORITY = ["Lux", "Luna", "Moon", "Sun"]  # ไล่ดึงตัวสำรองจากกลุ่มไหนก่อน เมื่อมีคนลา
+
+
+async def _generate_party_assignments(pool, guild_id: int):
+    """
+    สร้างโพยปาร์ตี้ใหม่ทั้งหมดจาก player_profiles ตัดคนที่กด 'ลา' ไว้ออกก่อน
+    แจก Priest ให้ครบทุกปาร์ตี้ก่อน (1 คน/ปาร์ตี้) แล้วเติมคนที่เหลือให้ครบ 6 คน/ปาร์ตี้
+    เขียนทับ party_assignments เดิมทั้งหมด — ต้องรัน /party leaveboard ใหม่ทุกครั้งที่ generate ซ้ำ
+    """
+    leave_ids = {r["discord_user_id"] for r in await pool.fetch(
+        "SELECT discord_user_id FROM party_leave WHERE guild_id = $1", guild_id
+    )}
+    profiles = await pool.fetch(
+        "SELECT discord_user_id, in_game_name, character_class FROM player_profiles WHERE guild_id = $1 ORDER BY in_game_name",
+        guild_id
+    )
+    people = [dict(r) for r in profiles if r["discord_user_id"] not in leave_ids]
+
+    priests = [p for p in people if p["character_class"] == PRIEST_CLASS_NAME]
+    others = [p for p in people if p["character_class"] != PRIEST_CLASS_NAME]
+
+    party_labels = [(g, i + 1) for g in PARTY_GROUPS for i in range(PARTIES_PER_GROUP)]  # 16 ช่องตายตัว
+    total = len(people)
+    num_parties = min(len(party_labels), -(-total // PARTY_SIZE)) if total else 0  # ceil div ปัดขึ้น
+    active_labels = party_labels[:num_parties]
+
+    assignments = {label: [] for label in active_labels}
+
+    missing_priest_count = 0
+    for i, label in enumerate(active_labels):
+        if i < len(priests):
+            assignments[label].append(priests[i])
+        else:
+            missing_priest_count += 1  # Priest ไม่พอครบทุกปาร์ตี้
+
+    leftover = priests[len(active_labels):] + others
+    idx = 0
+    for label in active_labels:
+        while len(assignments[label]) < PARTY_SIZE and idx < len(leftover):
+            assignments[label].append(leftover[idx])
+            idx += 1
+
+    await pool.execute("DELETE FROM party_assignments WHERE guild_id = $1", guild_id)
+    rows_to_insert = [
+        (guild_id, m["discord_user_id"], group_name, party_num, m["character_class"], m["in_game_name"])
+        for (group_name, party_num), members in assignments.items()
+        for m in members
+    ]
+    if rows_to_insert:
+        await pool.executemany(
+            """
+            INSERT INTO party_assignments (guild_id, discord_user_id, group_name, party_num, character_class, in_game_name)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            """,
+            rows_to_insert
+        )
+
+    unassigned_count = len(leftover) - idx  # กรณีคนเกินความจุ 96 (ยืนยันไว้ว่าไม่เกิน แต่กันเผื่อ)
+    return missing_priest_count, unassigned_count
+
+
+async def _ocr_party_image(image_bytes: bytes) -> dict:
+    """
+    อ่านรูปตารางปาร์ตี้ด้วย Tesseract OCR (ภาษาไทย) — สมมติโครงรูปเป็นกริด 4 แถว (SUN/Moon/Luna/Lux) x 4 คอลัมน์ (ปาร์ตี้ 1-4)
+    ตัดรูปเป็น 16 ช่องตามตำแหน่ง แล้วแยกอ่านคอลัมน์ชื่อ (ซ้าย) กับอาชีพ (ขวา) ทีละช่อง
+    หมายเหตุ: OCR ธรรมดาอ่านภาษาไทยพลาดได้ง่าย (ฟอนต์เล็ก/สีตัดกับพื้นหลังไม่ชัด) ต้องตรวจผลก่อนใช้จริงเสมอ
+    """
+    img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    width, height = img.size
+    rows, cols = len(PARTY_GROUPS), PARTIES_PER_GROUP
+    cell_w, cell_h = width / cols, height / rows
+
+    def _ocr_lines(cell_img: Image.Image) -> list:
+        gray = cell_img.convert("L")
+        gray = ImageOps.autocontrast(gray)
+        gray = gray.resize((gray.width * 3, gray.height * 3), Image.LANCZOS)
+        text = pytesseract.image_to_string(gray, lang="tha+eng", config="--psm 6")
+        return [ln.strip() for ln in text.split("\n") if ln.strip()]
+
+    result = {}
+    for ri, group in enumerate(PARTY_GROUPS):
+        for ci in range(cols):
+            x0, y0 = int(ci * cell_w), int(ri * cell_h)
+            x1, y1 = int(x0 + cell_w), int(y0 + cell_h)
+            cell = img.crop((x0, y0, x1, y1))
+
+            # ตัดแถบหัวตาราง (ชื่อปาร์ตี้/หัวคอลัมน์) ออกประมาณ 12% บนสุดของช่อง
+            body = cell.crop((0, int(cell.height * 0.12), cell.width, cell.height))
+            name_col = body.crop((0, 0, int(body.width * 0.58), body.height))
+            job_col = body.crop((int(body.width * 0.58), 0, body.width, body.height))
+
+            names = _ocr_lines(name_col)
+            jobs = _ocr_lines(job_col)
+            members = [
+                {"in_game_name": names[i], "character_class": jobs[i]}
+                for i in range(min(len(names), len(jobs)))
+            ]
+            result[(group, ci + 1)] = members
+
+    return result
+
+
+async def _match_ocr_to_profiles(pool, guild_id: int, ocr_result: dict):
+    """
+    จับคู่ชื่อที่ OCR อ่านได้กับ player_profiles แบบคล้ายเคียง (fuzzy match ผ่าน difflib)
+    คืนค่า (rows_to_insert สำหรับ party_assignments, unmatched รายการที่จับคู่ไม่เจอ)
+    """
+    profiles = [dict(r) for r in await pool.fetch(
+        "SELECT discord_user_id, in_game_name, character_class FROM player_profiles WHERE guild_id = $1",
+        guild_id
+    )]
+    name_pool = {p["in_game_name"]: p for p in profiles}
+    all_names = list(name_pool.keys())
+
+    rows_to_insert = []
+    unmatched = []
+
+    for (group_name, party_num), members in ocr_result.items():
+        for m in members:
+            ocr_name = m["in_game_name"]
+            if not ocr_name:
+                continue
+            match = difflib.get_close_matches(ocr_name, all_names, n=1, cutoff=0.6)
+            if match:
+                profile = name_pool[match[0]]
+                rows_to_insert.append((
+                    guild_id, profile["discord_user_id"], group_name, party_num,
+                    profile["character_class"], profile["in_game_name"]
+                ))
+            else:
+                unmatched.append(f"{group_name} {party_num}: \"{ocr_name}\" (อาชีพที่อ่านได้: {m['character_class']})")
+
+    return rows_to_insert, unmatched
+
+
+async def _fetch_party_assignments_grouped(pool, guild_id: int) -> dict:
+    rows = await pool.fetch(
+        "SELECT group_name, party_num, in_game_name, character_class FROM party_assignments WHERE guild_id = $1",
+        guild_id
+    )
+    grouped = {}
+    for r in rows:
+        grouped.setdefault((r["group_name"], r["party_num"]), []).append(dict(r))
+    return grouped
+
+
+def _render_party_board_image(guild: discord.Guild, grouped: dict) -> io.BytesIO:
+    """วาดตารางปาร์ตี้ทั้งหมดเป็นรูปเดียว จัดเป็นกริด กลุ่มใหญ่ (แถว) x ปาร์ตี้ย่อย (คอลัมน์) สีต่อแถวอิงจากสี role อาชีพจริง"""
+    fig, axes = plt.subplots(
+        len(PARTY_GROUPS), PARTIES_PER_GROUP,
+        figsize=(4.2 * PARTIES_PER_GROUP, 3.0 * len(PARTY_GROUPS))
+    )
+    for gi, group in enumerate(PARTY_GROUPS):
+        for pi in range(PARTIES_PER_GROUP):
+            ax = axes[gi][pi]
+            ax.axis("off")
+            label = f"{group} {pi + 1}"
+            members = grouped.get((group, pi + 1), [])
+            if not members:
+                ax.set_title(label, fontsize=11, fontweight="bold", loc="left")
+                continue
+            table_data = [[m["in_game_name"], m["character_class"]] for m in members]
+            table = ax.table(cellText=table_data, colLabels=[label, ""], cellLoc="center", loc="center")
+            table.auto_set_font_size(False)
+            table.set_fontsize(9)
+            table.scale(1, 1.6)
+            for col in range(2):
+                cell = table[0, col]
+                cell.set_facecolor((0.1, 0.1, 0.1))
+                cell.set_text_props(weight="bold", color="white")
+            for i, m in enumerate(members, start=1):
+                color = _class_color(guild, m["character_class"])
+                light = tuple(c * 0.35 + 0.65 for c in color)
+                table[i, 0].set_facecolor(light)
+                table[i, 1].set_facecolor(color)
+                table[i, 1].set_text_props(weight="bold", color="white")
+
+    fig.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
+async def _build_leaveboard_embed(guild: discord.Guild) -> discord.Embed:
+    pool = await db.get_pool()
+    rows = await pool.fetch(
+        "SELECT discord_user_id FROM party_leave WHERE guild_id = $1 ORDER BY left_at ASC",
+        guild.id
+    )
+    description = "\n".join(f"• <@{r['discord_user_id']}>" for r in rows) if rows else "*ยังไม่มีใครลา*"
+    embed = discord.Embed(title="🟡 กระดานลา (จัดปาร์ตี้)", description=description, color=0xFEE75C)
+    embed.set_footer(text="กด 'ลา' เพื่อแจ้งลา ระบบจะดึงคนอาชีพเดียวกันจาก Lux→Luna→Moon→Sun มาแทนอัตโนมัติ")
+    return embed
+
+
+async def refresh_party_boards(guild: discord.Guild):
+    """อัปเดตทั้งกระดานตาราง (รูปภาพ) และกระดานลา (embed+ปุ่ม) ที่เคยตั้งไว้ในกิลด์นี้"""
+    pool = await db.get_pool()
+
+    roster_row = await pool.fetchrow("SELECT channel_id, message_id FROM party_rosterboard WHERE guild_id = $1", guild.id)
+    if roster_row:
+        channel = guild.get_channel(roster_row["channel_id"])
+        if channel:
+            try:
+                message = await channel.fetch_message(roster_row["message_id"])
+                grouped = await _fetch_party_assignments_grouped(pool, guild.id)
+                if grouped:
+                    img = _render_party_board_image(guild, grouped)
+                    await message.edit(content=None, attachments=[discord.File(img, filename="party_board.png")])
+                else:
+                    await message.edit(content="ยังไม่มีโพยปาร์ตี้ ใช้ `/party generate` ก่อน", attachments=[])
+            except discord.NotFound:
+                pass
+            except Exception as e:
+                log.error(f"อัปเดตกระดานตารางปาร์ตี้ไม่สำเร็จ: {e}")
+
+    leave_row = await pool.fetchrow("SELECT channel_id, message_id FROM party_leaveboard WHERE guild_id = $1", guild.id)
+    if leave_row:
+        channel = guild.get_channel(leave_row["channel_id"])
+        if channel:
+            try:
+                message = await channel.fetch_message(leave_row["message_id"])
+                await message.edit(embed=await _build_leaveboard_embed(guild), view=PartyLeaveBoardView())
+            except discord.NotFound:
+                pass
+            except Exception as e:
+                log.error(f"อัปเดตกระดานลาไม่สำเร็จ: {e}")
+
+
+async def _substitute_for_leaver(pool, guild: discord.Guild, user_id: int):
+    """
+    เมื่อมีคนกดลา: หาคนอาชีพเดียวกันจากกลุ่ม Lux -> Luna -> Moon -> Sun (ไล่ปาร์ตี้ 1->4)
+    มาแทนตำแหน่งเดิมของคนที่ลา แล้วลบคนที่ลาออกจากโพย คืนค่า discord_user_id ของตัวแทน (หรือ None ถ้าหาไม่เจอ)
+    """
+    leaver = await pool.fetchrow(
+        "SELECT group_name, party_num, character_class FROM party_assignments WHERE guild_id = $1 AND discord_user_id = $2",
+        guild.id, user_id
+    )
+    if not leaver:
+        return None  # ยังไม่เคยอยู่ในโพย (ยังไม่ได้ /party generate หรือถูกแทนไปแล้วก่อนหน้า)
+
+    substitute = None
+    for group in SUBSTITUTE_PRIORITY:
+        if group == leaver["group_name"]:
+            continue
+        rows = await pool.fetch(
+            """
+            SELECT discord_user_id FROM party_assignments
+            WHERE guild_id = $1 AND group_name = $2 AND character_class = $3
+            ORDER BY party_num ASC
+            LIMIT 1
+            """,
+            guild.id, group, leaver["character_class"]
+        )
+        if rows:
+            substitute = rows[0]
+            break
+
+    await pool.execute(
+        "DELETE FROM party_assignments WHERE guild_id = $1 AND discord_user_id = $2",
+        guild.id, user_id
+    )
+
+    if substitute:
+        await pool.execute(
+            "UPDATE party_assignments SET group_name = $3, party_num = $4 WHERE guild_id = $1 AND discord_user_id = $2",
+            guild.id, substitute["discord_user_id"], leaver["group_name"], leaver["party_num"]
+        )
+        return substitute["discord_user_id"]
+    return None
+
+
+class PartyLeaveBoardView(discord.ui.View):
+    """กระดานลา — ปุ่ม 'ลา' (ดึงตัวสำรองมาแทนอัตโนมัติ) และ 'ยกเลิกลา' (เอาชื่อออกจากลิสต์คนลา)"""
+
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="ลา", style=discord.ButtonStyle.red, custom_id="party_leave_btn")
+    async def leave_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        pool = await db.get_pool()
+        already = await pool.fetchval(
+            "SELECT 1 FROM party_leave WHERE guild_id = $1 AND discord_user_id = $2",
+            interaction.guild.id, interaction.user.id
+        )
+        if already:
+            return await interaction.response.send_message("คุณแจ้งลาไว้อยู่แล้ว", ephemeral=True)
+
+        await pool.execute(
+            "INSERT INTO party_leave (guild_id, discord_user_id) VALUES ($1, $2)",
+            interaction.guild.id, interaction.user.id
+        )
+        sub_id = await _substitute_for_leaver(pool, interaction.guild, interaction.user.id)
+
+        if sub_id:
+            sub_member = interaction.guild.get_member(sub_id)
+            sub_mention = sub_member.mention if sub_member else f"<@{sub_id}>"
+            await interaction.response.send_message(
+                f"📋 บันทึกการลาแล้ว — ดึง {sub_mention} มาแทนตำแหน่งของคุณเรียบร้อย", ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                "📋 บันทึกการลาแล้ว — ⚠️ ไม่พบคนอาชีพเดียวกันมาแทน ปาร์ตี้จะขาดคนนี้ไป", ephemeral=True
+            )
+        await refresh_party_boards(interaction.guild)
+
+    @discord.ui.button(label="ยกเลิกลา", style=discord.ButtonStyle.secondary, custom_id="party_cancel_leave_btn")
+    async def cancel_leave_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        pool = await db.get_pool()
+        result = await pool.execute(
+            "DELETE FROM party_leave WHERE guild_id = $1 AND discord_user_id = $2",
+            interaction.guild.id, interaction.user.id
+        )
+        if result == "DELETE 0":
+            return await interaction.response.send_message("คุณไม่ได้อยู่ในสถานะลา", ephemeral=True)
+
+        await interaction.response.send_message(
+            "✅ ยกเลิกการลาแล้ว\n"
+            "⚠️ หมายเหตุ: ถ้ามีคนถูกดึงมาแทนตำแหน่งคุณไปแล้ว ระบบจะไม่สลับกลับให้อัตโนมัติ "
+            "ต้องรัน `/party generate` ใหม่เพื่อจัดโพยทั้งหมดใหม่",
+            ephemeral=True
+        )
+        await refresh_party_boards(interaction.guild)
+
+
+party_group = app_commands.Group(name="party", description="ระบบจัดปาร์ตี้อัตโนมัติ")
+
+
+@party_group.command(name="generate", description="สร้างโพยปาร์ตี้ใหม่แบบอัตโนมัติจากรายชื่อผู้เล่น (ตัดคนลาออก)")
+@has_mod_perms()
+async def party_generate(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    pool = await db.get_pool()
+
+    missing_priest, unassigned = await _generate_party_assignments(pool, interaction.guild.id)
+    msg = "✅ สร้างโพยปาร์ตี้ใหม่แบบอัตโนมัติเรียบร้อยแล้ว"
+    if missing_priest:
+        msg += f"\n⚠️ Priest ไม่พอ ขาด Priest อีก {missing_priest} ปาร์ตี้"
+    if unassigned:
+        msg += f"\n⚠️ มีคนเกินความจุ 16 ปาร์ตี้ (96 คน) อยู่ {unassigned} คน ยังไม่ถูกจัดเข้าปาร์ตี้"
+    msg += "\nใช้ `/party rosterboard` เพื่อโพสต์/อัปเดตกระดานตาราง"
+    await interaction.followup.send(msg, ephemeral=True)
+
+    await refresh_party_boards(interaction.guild)
+
+
+@party_group.command(name="upload", description="แนบรูปตารางปาร์ตี้ (SUN/Moon/Luna/Lux) ให้บอทอ่านด้วย OCR แล้วจัดโพยตามรูป")
+@has_mod_perms()
+@app_commands.describe(image="รูปตารางปาร์ตี้ที่จะให้บอทอ่านด้วย OCR")
+async def party_upload(interaction: discord.Interaction, image: discord.Attachment):
+    await interaction.response.defer(ephemeral=True)
+    pool = await db.get_pool()
+
+    if not image.content_type or not image.content_type.startswith("image/"):
+        return await interaction.followup.send("❌ ไฟล์ที่แนบไม่ใช่รูปภาพ", ephemeral=True)
+
+    image_bytes = await image.read()
+    ocr_result = await _ocr_party_image(image_bytes)
+    rows_to_insert, unmatched = await _match_ocr_to_profiles(pool, interaction.guild.id, ocr_result)
+
+    await pool.execute("DELETE FROM party_assignments WHERE guild_id = $1", interaction.guild.id)
+    if rows_to_insert:
+        await pool.executemany(
+            """
+            INSERT INTO party_assignments (guild_id, discord_user_id, group_name, party_num, character_class, in_game_name)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (guild_id, discord_user_id) DO UPDATE
+            SET group_name = EXCLUDED.group_name, party_num = EXCLUDED.party_num,
+                character_class = EXCLUDED.character_class, in_game_name = EXCLUDED.in_game_name
+            """,
+            rows_to_insert
+        )
+
+    msg = f"✅ อ่านรูปด้วย OCR เสร็จแล้ว จับคู่กับ player_profiles สำเร็จ {len(rows_to_insert)} คน"
+    if unmatched:
+        preview = "\n".join(unmatched[:15])
+        msg += f"\n⚠️ จับคู่ไม่เจอ {len(unmatched)} คน (OCR อาจอ่านชื่อผิด หรือคนนั้นยังไม่ได้แนะนำตัวไว้):\n{preview}"
+        if len(unmatched) > 15:
+            msg += f"\n...และอีก {len(unmatched) - 15} คน"
+    msg += "\n\n⚠️ OCR ธรรมดาอ่านภาษาไทยพลาดได้ง่าย แนะนำตรวจสอบผลลัพธ์ที่กระดานตารางก่อนใช้งานจริงเสมอ"
+    msg += "\nใช้ `/party rosterboard` เพื่อโพสต์/อัปเดตกระดานตาราง"
+    await interaction.followup.send(msg, ephemeral=True)
+
+    await refresh_party_boards(interaction.guild)
+
+
+@party_group.command(name="leaveboard", description="โพสต์กระดานลา (ปุ่มลา/ยกเลิกลา) ในห้องนี้")
+@has_mod_perms()
+async def party_leaveboard(interaction: discord.Interaction):
+    embed = await _build_leaveboard_embed(interaction.guild)
+    await interaction.response.send_message(embed=embed, view=PartyLeaveBoardView())
+    msg = await interaction.original_response()
+
+    pool = await db.get_pool()
+    await pool.execute(
+        """
+        INSERT INTO party_leaveboard (guild_id, channel_id, message_id) VALUES ($1, $2, $3)
+        ON CONFLICT (guild_id) DO UPDATE SET channel_id = $2, message_id = $3
+        """,
+        interaction.guild.id, interaction.channel.id, msg.id
+    )
+
+
+@party_group.command(name="rosterboard", description="โพสต์กระดานตารางปาร์ตี้ (รูปภาพ) ในห้องนี้")
+@has_mod_perms()
+async def party_rosterboard(interaction: discord.Interaction):
+    await interaction.response.defer()
+    pool = await db.get_pool()
+    grouped = await _fetch_party_assignments_grouped(pool, interaction.guild.id)
+    if grouped:
+        img = _render_party_board_image(interaction.guild, grouped)
+        message = await interaction.channel.send(file=discord.File(img, filename="party_board.png"))
+    else:
+        message = await interaction.channel.send("ยังไม่มีโพยปาร์ตี้ ใช้ `/party generate` ก่อน")
+    await interaction.followup.send("โพสต์กระดานตารางปาร์ตี้แล้ว", ephemeral=True)
+
+    await pool.execute(
+        """
+        INSERT INTO party_rosterboard (guild_id, channel_id, message_id) VALUES ($1, $2, $3)
+        ON CONFLICT (guild_id) DO UPDATE SET channel_id = $2, message_id = $3
+        """,
+        interaction.guild.id, interaction.channel.id, message.id
+    )
+
+
+@party_group.command(name="cancel", description="ยกเลิกระบบจัดปาร์ตี้ทั้งหมด (ล้างโพย + ปิดกระดาน)")
+@has_mod_perms()
+async def party_cancel(interaction: discord.Interaction):
+    pool = await db.get_pool()
+    await pool.execute("DELETE FROM party_assignments WHERE guild_id = $1", interaction.guild.id)
+    await pool.execute("DELETE FROM party_leave WHERE guild_id = $1", interaction.guild.id)
+
+    for table_name in ("party_leaveboard", "party_rosterboard"):
+        row = await pool.fetchrow(f"SELECT channel_id, message_id FROM {table_name} WHERE guild_id = $1", interaction.guild.id)
+        if row:
+            channel = interaction.guild.get_channel(row["channel_id"])
+            if channel:
+                try:
+                    old_msg = await channel.fetch_message(row["message_id"])
+                    await old_msg.delete()
+                except Exception:
+                    pass
+        await pool.execute(f"DELETE FROM {table_name} WHERE guild_id = $1", interaction.guild.id)
+
+    await interaction.response.send_message("🗑️ ยกเลิกระบบจัดปาร์ตี้ทั้งหมดแล้ว (ล้างโพย + ปิดกระดาน)", ephemeral=True)
+
+tree.add_command(party_group)
+
+
 # Invite
 @tree.command(name="invite", description="รับลิงก์เชิญบอทเข้าเซิร์ฟเวอร์ (พร้อม permission ครบ รวม Manage Roles)")
 async def invite_cmd(interaction: discord.Interaction):
@@ -1079,6 +1543,11 @@ async def help_cmd(interaction: discord.Interaction):
     embed.add_field(name="/player-list", value="ดูตารางรายชื่อผู้เล่นที่แนะนำตัวไว้ทั้งหมด (แอดมิน)", inline=False)
     embed.add_field(name="/player-remove", value="ลบข้อมูลแนะนำตัวของสมาชิก (แอดมิน)", inline=False)
     embed.add_field(name="/setup-playerboard", value="ตั้งกระดานรายชื่อสมาชิกแบบรูปภาพ อัปเดตอัตโนมัติ (แอดมิน)", inline=False)
+    embed.add_field(name="/party generate", value="สร้างโพยปาร์ตี้ใหม่แบบอัตโนมัติจากรายชื่อผู้เล่น (SUN/Moon/Luna/Lux, ตัดคนลาออก) (แอดมิน)", inline=False)
+    embed.add_field(name="/party upload", value="แนบรูปตารางปาร์ตี้ให้บอทอ่านด้วย OCR แล้วจัดโพยตามรูป (แอดมิน)", inline=False)
+    embed.add_field(name="/party leaveboard", value="โพสต์กระดานลา (ปุ่มลา/ยกเลิกลา) (แอดมิน)", inline=False)
+    embed.add_field(name="/party rosterboard", value="โพสต์กระดานตารางปาร์ตี้แบบรูปภาพ (แอดมิน)", inline=False)
+    embed.add_field(name="/party cancel", value="ยกเลิกระบบจัดปาร์ตี้ทั้งหมด (แอดมิน)", inline=False)
     embed.add_field(name="/invite", value="รับลิงก์เชิญบอทพร้อม permission ครบ (รวม Manage Roles)", inline=False)
     embed.add_field(name="/ping", value="ตรวจสอบสถานะบอท", inline=False)
     await interaction.response.send_message(embed=embed, ephemeral=True)
