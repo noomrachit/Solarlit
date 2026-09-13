@@ -105,6 +105,13 @@ async def init_db():
                 PRIMARY KEY (guild_id, user_id)
             );
 
+            CREATE TABLE IF NOT EXISTS queue_skipped (
+                guild_id BIGINT NOT NULL,
+                user_id BIGINT NOT NULL,
+                skipped_at TIMESTAMPTZ DEFAULT NOW(),
+                PRIMARY KEY (guild_id, user_id)
+            );
+
             CREATE TABLE IF NOT EXISTS banned_words (
                 guild_id BIGINT NOT NULL,
                 word TEXT NOT NULL,
