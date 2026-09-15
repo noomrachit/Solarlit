@@ -24,6 +24,7 @@ import {
   useDeleteCustomCommand
 } from "@workspace/api-client-react"
 import { useQueryClient } from "@tanstack/react-query"
+import { useBillingConfig, useBillingStatus, useSubscribe, openOmiseCardForm, type PlanTier } from "@/hooks/use-billing"
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
@@ -31,7 +32,7 @@ import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 import { Badge } from "@/components/ui/badge"
-import { Server, Settings as SettingsIcon, AlertTriangle, ListMusic, ShieldBan, Terminal, Trash2, Plus, RefreshCw } from "lucide-react"
+import { Server, Settings as SettingsIcon, AlertTriangle, ListMusic, ShieldBan, Terminal, Trash2, Plus, RefreshCw, CreditCard } from "lucide-react"
 
 export default function GuildDetail() {
   const [match, params] = useRoute("/guilds/:guildId")
@@ -72,6 +73,9 @@ export default function GuildDetail() {
           <TabsTrigger value="commands" className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-6 py-3 font-mono uppercase tracking-wider text-xs">
             <Terminal className="w-3.5 h-3.5 mr-2" /> คำสั่ง
           </TabsTrigger>
+          <TabsTrigger value="billing" className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-6 py-3 font-mono uppercase tracking-wider text-xs">
+            <CreditCard className="w-3.5 h-3.5 mr-2" /> แพ็กเกจ/บิล
+          </TabsTrigger>
         </TabsList>
 
         <div className="mt-6">
@@ -80,6 +84,7 @@ export default function GuildDetail() {
           <TabsContent value="queue"><QueueTab guildId={guildId} /></TabsContent>
           <TabsContent value="banned_words"><BannedWordsTab guildId={guildId} /></TabsContent>
           <TabsContent value="commands"><CustomCommandsTab guildId={guildId} /></TabsContent>
+          <TabsContent value="billing"><BillingTab guildId={guildId} /></TabsContent>
         </div>
       </Tabs>
     </div>
@@ -571,6 +576,121 @@ function CustomCommandsTab({ guildId }: { guildId: string }) {
             </form>
           </CardContent>
         </Card>
+      </div>
+    </div>
+  )
+}
+
+function BillingTab({ guildId }: { guildId: string }) {
+  const { data: config, isLoading: configLoading } = useBillingConfig()
+  const { data: status, isLoading: statusLoading, error: statusError } = useBillingStatus(guildId)
+  const subscribe = useSubscribe(guildId)
+  const [pendingTier, setPendingTier] = useState<PlanTier | null>(null)
+
+  if (configLoading || statusLoading) {
+    return <div className="text-muted-foreground font-mono animate-pulse">กำลังโหลดข้อมูลแพ็กเกจ...</div>
+  }
+
+  if (statusError) {
+    return (
+      <Card className="bg-card/30 border-border/50 max-w-2xl">
+        <CardContent className="pt-6 text-sm text-muted-foreground">
+          โหลดสถานะแพ็กเกจไม่สำเร็จ: {(statusError as Error).message}
+        </CardContent>
+      </Card>
+    )
+  }
+
+  const handleChoosePlan = async (tier: PlanTier) => {
+    if (!config?.omisePublicKey) return
+    const plan = config.plans[tier]
+    setPendingTier(tier)
+    try {
+      const omiseToken = await openOmiseCardForm(config.omisePublicKey, plan.priceThb * 100)
+      await subscribe.mutateAsync({ tier, omiseToken })
+      toast.success(`สมัครแพ็กเกจ ${plan.name} สำเร็จ`)
+    } catch (err) {
+      toast.error((err as Error).message || "สมัครแพ็กเกจไม่สำเร็จ")
+    } finally {
+      setPendingTier(null)
+    }
+  }
+
+  const statusLabel: Record<string, string> = {
+    trialing: "ทดลองใช้",
+    active: "ใช้งานอยู่",
+    past_due: "ค้างชำระ",
+    canceled: "ยกเลิกแล้ว",
+  }
+
+  return (
+    <div className="space-y-8 max-w-5xl">
+      {!config?.omiseConfigured && (
+        <div className="border border-amber-500/40 bg-amber-500/10 text-amber-500 text-xs font-mono px-4 py-3">
+          ⚠ ระบบชำระเงินยังไม่เปิดใช้งาน (ยังไม่ได้ตั้งค่า Omise key ฝั่งเซิร์ฟเวอร์) —
+          ปุ่มสมัครแพ็กเกจด้านล่างจะใช้งานไม่ได้จนกว่าจะตั้งค่าเสร็จ
+        </div>
+      )}
+
+      <Card className="bg-card/30 border-border/50">
+        <CardHeader>
+          <CardTitle className="uppercase tracking-wider text-sm font-mono text-primary">สถานะปัจจุบัน</CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-wrap items-center gap-6 text-sm font-mono">
+          <div>
+            <div className="text-muted-foreground text-xs uppercase">แพ็กเกจ</div>
+            <div className="text-foreground uppercase">{status?.tier ?? "trial"}</div>
+          </div>
+          <div>
+            <div className="text-muted-foreground text-xs uppercase">สถานะ</div>
+            <Badge variant={status?.status === "active" ? "default" : "secondary"}>
+              {statusLabel[status?.status ?? "trialing"] ?? status?.status}
+            </Badge>
+          </div>
+          <div>
+            <div className="text-muted-foreground text-xs uppercase">โควต้าบอท Voice Relay</div>
+            <div className="text-foreground">{status?.relayBotLimit ?? "-"} บอท</div>
+          </div>
+          {status?.trialEndsAt && (
+            <div>
+              <div className="text-muted-foreground text-xs uppercase">ทดลองใช้หมดอายุ</div>
+              <div className="text-foreground">{format(new Date(status.trialEndsAt), "d MMM yyyy")}</div>
+            </div>
+          )}
+          {status?.currentPeriodEnd && (
+            <div>
+              <div className="text-muted-foreground text-xs uppercase">ต่ออายุรอบถัดไป</div>
+              <div className="text-foreground">{format(new Date(status.currentPeriodEnd), "d MMM yyyy")}</div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <div className="grid md:grid-cols-3 gap-4">
+        {config && (Object.entries(config.plans) as [PlanTier, typeof config.plans[PlanTier]][]).map(([tier, plan]) => {
+          const isCurrent = status?.tier === tier && status?.status === "active"
+          return (
+            <Card key={tier} className={`bg-card/30 ${isCurrent ? "border-primary" : "border-border/50"}`}>
+              <CardHeader>
+                <CardTitle className="font-mono text-base">{plan.name}</CardTitle>
+                <CardDescription className="font-mono text-lg text-foreground">
+                  ฿{plan.priceThb}<span className="text-xs text-muted-foreground">/เดือน</span>
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <p className="text-xs text-muted-foreground font-mono">Voice Relay สูงสุด {plan.relayBotLimit} บอท</p>
+                <Button
+                  className="w-full font-mono uppercase tracking-widest"
+                  variant={isCurrent ? "secondary" : "default"}
+                  disabled={!config.omiseConfigured || isCurrent || pendingTier === tier}
+                  onClick={() => handleChoosePlan(tier)}
+                >
+                  {isCurrent ? "แพ็กเกจปัจจุบัน" : pendingTier === tier ? "กำลังดำเนินการ..." : "เลือกแพ็กเกจนี้"}
+                </Button>
+              </CardContent>
+            </Card>
+          )
+        })}
       </div>
     </div>
   )
