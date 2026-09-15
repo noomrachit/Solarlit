@@ -912,6 +912,52 @@ async def edit_profile(interaction: discord.Interaction):
     )
 
 
+@tree.command(name="reset-introductions", description="ล้างรายชื่อแนะนำตัวทั้งหมด + ถอด Role อาชีพคืนทุกคน (เริ่มเช็คใหม่ตั้งแต่ต้น)")
+@has_mod_perms()
+async def reset_introductions(interaction: discord.Interaction):
+    """
+    รีเซ็ตระบบแนะนำตัวทั้งกิลด์ — ลบทุกแถวใน player_profiles และถอด Role อาชีพ (job_roles) ที่ติดตัว
+    สมาชิกแต่ละคนออก เพื่อให้ทุกคนกดปุ่ม 📝 แนะนำตัว ใหม่ได้ทันที (ปกติจะโดนกันด้วยเช็ค "คุณเคยแนะนำตัวแล้ว")
+    ไม่มีขั้นตอนยืนยันซ้อน (ตามแบบ /party cancel) — คำสั่งนี้จำกัดสิทธิ์ด้วย has_mod_perms() อยู่แล้ว
+    ทำงานได้แม้บอทไม่มีสิทธิ์ถอด role บางคน (เช่น role บอทอยู่ต่ำกว่าในลำดับชั้น) จะข้ามคนนั้นไปแบบ log ไว้ ไม่ทำให้คำสั่งทั้งหมดล้ม
+    """
+    await interaction.response.defer(ephemeral=True)
+    pool = await db.get_pool()
+
+    rows = await pool.fetch(
+        "SELECT discord_user_id FROM player_profiles WHERE guild_id = $1", interaction.guild.id
+    )
+    job_role_ids = {r["role_id"] for r in await pool.fetch(
+        "SELECT role_id FROM job_roles WHERE guild_id = $1", interaction.guild.id
+    )}
+
+    roles_removed_from = 0
+    for row in rows:
+        member = interaction.guild.get_member(row["discord_user_id"])
+        if member is None:
+            continue
+        roles_to_remove = [r for r in member.roles if r.id in job_role_ids]
+        if not roles_to_remove:
+            continue
+        try:
+            await member.remove_roles(*roles_to_remove, reason="รีเซ็ตระบบแนะนำตัว (/reset-introductions)")
+            roles_removed_from += 1
+        except discord.Forbidden:
+            log.warning(f"ไม่มีสิทธิ์ถอด role อาชีพจาก {member.id} ตอนรีเซ็ตแนะนำตัว")
+        except Exception as e:
+            log.error(f"ถอด role อาชีพจาก {member.id} ไม่สำเร็จ: {e}")
+
+    total = len(rows)
+    await pool.execute("DELETE FROM player_profiles WHERE guild_id = $1", interaction.guild.id)
+    await refresh_player_board(interaction.guild)
+
+    await interaction.followup.send(
+        f"🗑️ รีเซ็ตระบบแนะนำตัวเรียบร้อย — ลบรายชื่อ {total} คน, ถอด Role อาชีพออกจาก {roles_removed_from} คน\n"
+        "ทุกคนกดปุ่ม 📝 แนะนำตัว ที่กระดานเดิมเพื่อเริ่มใหม่ได้ทันที",
+        ephemeral=True
+    )
+
+
 @tree.command(name="player-search", description="ค้นหาผู้เล่นจากชื่อในเกมหรือชื่อในดิส (แอดมิน)")
 @has_mod_perms()
 @app_commands.describe(query="ชื่อในเกมหรือชื่อในดิส (ค้นแบบบางส่วนได้)")
