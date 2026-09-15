@@ -979,10 +979,10 @@ class QueueFullBoardView(discord.ui.View):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     # ── แถวแอดมิน (เรียกก่อนคิว / ดูคนถูกข้าม / นำกลับเข้าคิว / ล้างคิว) ──
-    @discord.ui.button(label="เรียกก่อนคิว", style=discord.ButtonStyle.green, custom_id="queue_board_priority_call", row=2)
+    @discord.ui.button(label="เรียกจากคนถูกข้าม", style=discord.ButtonStyle.green, custom_id="queue_board_priority_call", row=2)
     async def priority_call_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message(
-            "เลือกสมาชิกที่จะเรียกก่อนคิว:", view=QueuePriorityCallSelectView(), ephemeral=True
+            "เลือกสมาชิกจากกระดานคิวที่ถูกข้าม ที่จะเรียกเข้ามา:", view=QueuePriorityCallSelectView(), ephemeral=True
         )
 
     @discord.ui.button(label="ดูคนถูกข้าม", style=discord.ButtonStyle.secondary, custom_id="queue_board_skipped", row=2)
@@ -1018,57 +1018,48 @@ async def _renumber_queue(pool, guild_id: int):
 
 async def _priority_call(interaction: discord.Interaction, target: discord.Member):
     """
-    เรียกคิวของ target ก่อนคิว โดยย้ายทุกคนที่อยู่ก่อนหน้าออกจากกระดานหลัก
-    ไปเก็บไว้ที่ queue_skipped (กระดานแยก) แล้วจัดคิวที่เหลือใหม่
+    เรียกคนที่ถูกข้ามคิว (อยู่ในกระดานคิวที่ถูกข้าม) ให้เข้ามาเรียกทันที
+    ดึงออกจากกระดานที่ถูกข้าม แล้วใส่ไว้บนสุดของคิวหลักพร้อมมาร์คว่าเรียกแล้ว — ไม่แตะคนอื่นในคิวหลักเลย
     """
     pool = await db.get_pool()
-    target_row = await pool.fetchrow(
-        "SELECT position FROM queue WHERE guild_id = $1 AND user_id = $2",
+    existed = await pool.fetchval(
+        "SELECT 1 FROM queue_skipped WHERE guild_id = $1 AND user_id = $2",
         interaction.guild.id, target.id
     )
-    if not target_row:
+    if not existed:
         return await interaction.response.send_message(
-            f"❌ {target.mention} ไม่ได้อยู่ในคิว", ephemeral=True
-        )
-
-    skipped_rows = await pool.fetch(
-        "SELECT user_id FROM queue WHERE guild_id = $1 AND position < $2",
-        interaction.guild.id, target_row["position"]
-    )
-
-    if skipped_rows:
-        skipped_ids = [r["user_id"] for r in skipped_rows]
-        await pool.executemany(
-            """
-            INSERT INTO queue_skipped (guild_id, user_id, skipped_at)
-            VALUES ($1, $2, NOW())
-            ON CONFLICT (guild_id, user_id) DO UPDATE SET skipped_at = NOW()
-            """,
-            [(interaction.guild.id, uid) for uid in skipped_ids]
-        )
-        await pool.execute(
-            "DELETE FROM queue WHERE guild_id = $1 AND user_id = ANY($2::bigint[])",
-            interaction.guild.id, skipped_ids
+            f"❌ {target.mention} ไม่ได้อยู่ในกระดานคิวที่ถูกข้าม", ephemeral=True
         )
 
     await pool.execute(
-        "UPDATE queue SET called = TRUE WHERE guild_id = $1 AND user_id = $2",
+        "DELETE FROM queue_skipped WHERE guild_id = $1 AND user_id = $2",
         interaction.guild.id, target.id
     )
+
+    min_pos = await pool.fetchval(
+        "SELECT COALESCE(MIN(position), 1) FROM queue WHERE guild_id = $1", interaction.guild.id
+    )
+    already_in_queue = await pool.fetchval(
+        "SELECT 1 FROM queue WHERE guild_id = $1 AND user_id = $2",
+        interaction.guild.id, target.id
+    )
+    if already_in_queue:
+        await pool.execute(
+            "UPDATE queue SET position = $3, called = TRUE WHERE guild_id = $1 AND user_id = $2",
+            interaction.guild.id, target.id, min_pos - 1
+        )
+    else:
+        await pool.execute(
+            "INSERT INTO queue (guild_id, user_id, position, called) VALUES ($1, $2, $3, TRUE)",
+            interaction.guild.id, target.id, min_pos - 1
+        )
     await _renumber_queue(pool, interaction.guild.id)
 
     announce = discord.Embed(
-        title="📢 ถึงคิวแล้ว! (เรียกก่อนคิว)",
+        title="📢 ถึงคิวแล้ว! (เรียกจากกระดานคิวที่ถูกข้าม)",
         description=f"{target.mention} กรุณาเข้ามาได้เลย",
         color=discord.Color.green()
     )
-    if skipped_rows:
-        skip_mentions = ", ".join(f"<@{uid}>" for uid in skipped_ids)
-        announce.add_field(
-            name=f"⏭️ ข้ามไป {len(skipped_rows)} คน (ย้ายไปกระดานคิวที่ถูกข้าม)",
-            value=skip_mentions,
-            inline=False
-        )
     await interaction.response.send_message(embed=announce)
     await refresh_all_boards(interaction.guild)
 
@@ -1237,7 +1228,7 @@ class QueuePriorityCallSelectView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=60)
 
-    @discord.ui.select(cls=discord.ui.UserSelect, placeholder="เลือกสมาชิกที่จะเรียกก่อนคิว")
+    @discord.ui.select(cls=discord.ui.UserSelect, placeholder="เลือกสมาชิกจากกระดานคิวที่ถูกข้าม")
     async def select_user(self, interaction: discord.Interaction, select: discord.ui.UserSelect):
         target = select.values[0]
         if not isinstance(target, discord.Member):
@@ -1306,9 +1297,9 @@ async def queue_bookings_cmd(interaction: discord.Interaction):
         return await interaction.response.send_message("ยังไม่มีการจองคิวล่วงหน้า", ephemeral=True)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
-@queue_group.command(name="call", description="เรียกคิว (ไม่ระบุ user = เรียกคิวถัดไปตามปกติ / ระบุ user = ดึงมาเรียกก่อนคิว)")
+@queue_group.command(name="call", description="เรียกคิว (ไม่ระบุ user = เรียกคิวถัดไปตามปกติ / ระบุ user = เรียกคนนั้นจากกระดานคิวที่ถูกข้ามเข้ามา)")
 @has_mod_perms()
-@app_commands.describe(user="ระบุถ้าต้องการดึงคนนี้มาเรียกก่อนคิว (คนที่ถูกข้ามจะย้ายไปกระดานคิวที่ถูกข้าม)")
+@app_commands.describe(user="ระบุถ้าต้องการเรียกคนนี้จากกระดานคิวที่ถูกข้ามเข้ามาทันที (ต้องเป็นคนที่อยู่ในกระดานคิวที่ถูกข้ามเท่านั้น)")
 async def queue_call(interaction: discord.Interaction, user: discord.Member = None):
     if user is not None:
         return await _priority_call(interaction, user)
@@ -2008,7 +1999,7 @@ async def help_cmd(interaction: discord.Interaction):
     embed.add_field(name="/customcommand", value="add • remove • list • prefix", inline=False)
     embed.add_field(name="/reactionrole", value="add • remove", inline=False)
     embed.add_field(name="/queue", value="join • leave • list • book • unbook • bookings • clear • refresh • board", inline=False)
-    embed.add_field(name="/queue call [user]", value="เรียกคิวปกติ / ระบุ user เพื่อดึงมาเรียกก่อนคิว (คนที่ถูกข้ามย้ายไปกระดานคิวที่ถูกข้าม)", inline=False)
+    embed.add_field(name="/queue call [user]", value="เรียกคิวปกติ / ระบุ user เพื่อเรียกคนนั้นจากกระดานคิวที่ถูกข้ามเข้ามาทันที", inline=False)
     embed.add_field(name="/queue skipped • /queue requeue", value="ดูรายชื่อคนที่ถูกข้ามคิว • นำกลับเข้าคิวหลัก", inline=False)
     embed.add_field(name="กระดานคิว (/queue board)", value="มีปุ่มครบทุกคำสั่งของระบบคิวในที่เดียว: เข้าคิว/ออกจากคิว/จองคิว/ยกเลิกจอง/เรียก/จบ/ข้าม/รีเฟรช/ดูรายการจอง/เรียกก่อนคิว/ดูคนถูกข้าม/นำกลับเข้าคิว/ล้างคิว", inline=False)
     embed.add_field(name="/voice", value="create • delete • limit • rename — จัดการห้องเสียง", inline=False)
@@ -2033,7 +2024,7 @@ BOT_DASHBOARD = [
         "color": 0x5865F2,
         "commands": [
             "/queue — join, leave, list, book, unbook, bookings, clear, refresh, board",
-            "/queue call [user] — เรียกคิวปกติ / ระบุ user เพื่อดึงมาเรียกก่อนคิว",
+            "/queue call [user] — เรียกคิวปกติ / ระบุ user เพื่อเรียกจากกระดานคิวที่ถูกข้ามเข้ามาทันที",
             "/queue skipped, /queue requeue — ดู/นำกลับคนที่ถูกข้ามคิว",
             "กระดานคิวมีปุ่มครบทุกคำสั่งของระบบคิวในที่เดียว",
             "/breakout — start, move, recall, setowner, setspeakers, unsetspeakers",
