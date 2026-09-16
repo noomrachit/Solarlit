@@ -16,12 +16,18 @@ const router: IRouter = Router();
 // relayBotLimit counts the listener bot ("หัวหน้า") + speaker bots
 // ("ลูกน้อง") together, same as voicerelay/relay_bot.py's `limit` check.
 export const PLANS = {
-  starter: { name: "STARTER", priceThb: 159, relayBotLimit: 2 },
-  standard: { name: "STANDARD", priceThb: 199, relayBotLimit: 4 },
-  pro: { name: "PRO", priceThb: 259, relayBotLimit: 6 },
+  standard: { name: "STANDARD", priceThb: 120, relayBotLimit: 6 },
+  pro: { name: "PRO", priceThb: 250, relayBotLimit: 12 },
 } as const;
 export type PlanTier = keyof typeof PLANS;
 const TRIAL_RELAY_BOT_LIMIT = PLANS.pro.relayBotLimit; // full access during trial
+
+// เซิร์ฟเวอร์ทดลอง/companion ที่ยกเว้นการเก็บเงินทุกกรณี — mirrors
+// voicerelay/access.py's EXEMPT_GUILD_IDS (ต้องแก้พร้อมกันทั้งสองที่)
+const EXEMPT_GUILD_IDS = new Set<string>([
+  "1359530731872718858", // COMPANION - SOLARLIT
+  "1420296466718658613",
+]);
 
 function isPlanTier(v: unknown): v is PlanTier {
   return typeof v === "string" && v in PLANS;
@@ -56,6 +62,18 @@ router.get("/billing/:guildId/status", requireAuth, async (req, res): Promise<vo
     res.status(403).json({ error: "Not an admin of this guild" });
     return;
   }
+
+  if (EXEMPT_GUILD_IDS.has(guildId)) {
+    res.json({
+      tier: "exempt",
+      status: "active",
+      trialEndsAt: null,
+      currentPeriodEnd: null,
+      relayBotLimit: 99,
+    });
+    return;
+  }
+
   if (!billingPool) {
     res.status(503).json({ error: "Billing database is not configured" });
     return;
@@ -97,13 +115,17 @@ router.get("/billing/:guildId/status", requireAuth, async (req, res): Promise<vo
 });
 
 // ─── Protected: subscribe / change plan ────────────────────────────────────
-// Body: { tier: "starter" | "standard" | "pro", omiseToken: string }
+// Body: { tier: "standard" | "pro", omiseToken: string }
 // omiseToken comes from Omise.js (card popup) running client-side in the
 // dashboard — the raw card number never touches this server (PCI scope).
 router.post("/billing/:guildId/subscribe", requireAuth, async (req, res): Promise<void> => {
   const guildId = guildIdFromParam(req);
   if (!userOwnsGuild(req.session.guilds, guildId)) {
     res.status(403).json({ error: "Not an admin of this guild" });
+    return;
+  }
+  if (EXEMPT_GUILD_IDS.has(guildId)) {
+    res.status(400).json({ error: "This guild is exempt from billing — no subscription needed" });
     return;
   }
   if (!billingPool) {
