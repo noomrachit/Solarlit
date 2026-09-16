@@ -1,3 +1,4 @@
+import path from "node:path";
 import express, { type Express } from "express";
 import cors from "cors";
 import pinoHttp from "pino-http";
@@ -49,5 +50,25 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 app.use("/api", router);
+
+// Serve the dashboard's built static files from the same origin/domain as
+// the API. Same-origin is required: the dashboard's fetch calls use relative
+// "/api/..." paths and the session cookie is scoped to this origin — split
+// across two Railway domains, both auth and API calls would break.
+// Built by `pnpm --filter @workspace/dashboard run build` (see build command
+// on this Railway service) into artifacts/dashboard/dist/public.
+const dashboardDistPath = path.join(
+  __dirname,
+  "..",
+  "..",
+  "dashboard",
+  "dist",
+  "public",
+);
+app.use(express.static(dashboardDistPath));
+// SPA fallback for any non-/api route (client-side routing via wouter).
+app.get(/^\/(?!api\/).*/, (_req, res) => {
+  res.sendFile(path.join(dashboardDistPath, "index.html"));
+});
 
 export default app;
