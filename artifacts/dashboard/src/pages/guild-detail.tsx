@@ -666,7 +666,7 @@ function BillingTab({ guildId }: { guildId: string }) {
         </CardContent>
       </Card>
 
-      <div className="grid md:grid-cols-3 gap-4">
+      <div className="grid md:grid-cols-2 gap-4">
         {config && (Object.entries(config.plans) as [PlanTier, typeof config.plans[PlanTier]][]).map(([tier, plan]) => {
           const isCurrent = status?.tier === tier && status?.status === "active"
           return (
