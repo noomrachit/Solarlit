@@ -16,10 +16,9 @@ artifacts/api-server/src/db/billingPool.ts เป๊ะๆ ถ้าแก้ท
 
 Tier -> จำนวนบอทสูงสุด (นับรวมบอทฟัง "หัวหน้า" + บอทพูด "ลูกน้อง" ทุกตัว
 ที่ใช้งานพร้อมกัน) อิงตามหน้าราคาเว็บ (website/index.html):
-  trial (หรือ active แต่ query DB ไม่เจอ tier ที่รู้จัก) -> 6 (เท่า PRO เต็ม)
-  starter  -> 2   (บอทฟัง 1 + บอทพูด 1)
-  standard -> 4   (บอทฟัง 1 + บอทพูด 3)
-  pro      -> 6   (บอทฟัง 1 + บอทพูด 5)
+  trial (หรือ active แต่ query DB ไม่เจอ tier ที่รู้จัก) -> 12 (เท่า PRO เต็ม)
+  standard -> 6    (บอทฟัง 1 + บอทพูด 5)
+  pro      -> 12   (บอทฟัง 1-2 + บอทพูด 10)
 """
 
 import os
@@ -31,10 +30,16 @@ import asyncpg
 
 log = logging.getLogger("voice-relay.access")
 
+# เซิร์ฟเวอร์ทดลอง/companion ที่ยกเว้นการเช็ค billing ทุกกรณี (ไม่มีวันโดนบล็อก
+# ไม่ว่าจะไม่มี guild_subscriptions row, trial หมดอายุ, หรือ status ไม่ active)
+EXEMPT_GUILD_IDS = {
+    1359530731872718858,  # COMPANION - SOLARLIT
+    1420296466718658613,
+}
+
 _RELAY_BOT_LIMITS = {
-    "starter": 2,
-    "standard": 4,
-    "pro": 6,
+    "standard": 6,
+    "pro": 12,
 }
 _TRIAL_RELAY_BOT_LIMIT = _RELAY_BOT_LIMITS["pro"]  # full access during trial (billing DB is live, guild just has no row yet)
 # ใช้เฉพาะตอน BILLING_DATABASE_URL ยังไม่ถูกตั้งค่าเลย (ระบบ billing ทั้งระบบยังไม่เปิด) —
@@ -155,6 +160,9 @@ async def _fetch_guild_state(guild_id: int) -> tuple[bool, str, int]:
 
 
 async def _get_cached(guild_id: int) -> tuple[bool, str, int]:
+    if guild_id in EXEMPT_GUILD_IDS:
+        return True, "", _FAILOPEN_RELAY_BOT_LIMIT
+
     now = time.monotonic()
     cached = _cache.get(guild_id)
     if cached and now - cached[0] < _CACHE_TTL_SECONDS:
