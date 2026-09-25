@@ -145,6 +145,18 @@ async def init_db():
                 ON queue_bookings (guild_id, slot_time)
                 WHERE activated = FALSE;
 
+            CREATE TABLE IF NOT EXISTS queue_history (
+                id SERIAL PRIMARY KEY,
+                guild_id BIGINT NOT NULL,
+                user_id BIGINT NOT NULL,
+                action TEXT NOT NULL,
+                actioned_by BIGINT,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_queue_history_guild
+                ON queue_history (guild_id, created_at DESC);
+
             CREATE TABLE IF NOT EXISTS breakout_sessions (
                 guild_id BIGINT PRIMARY KEY,
                 source_channel_id BIGINT NOT NULL,
