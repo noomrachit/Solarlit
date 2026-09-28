@@ -724,7 +724,7 @@ class IntroductionModal(discord.ui.Modal, title="แนะนำตัวผู�
         )
         if existing:
             await interaction.response.send_message(
-                "คุณเคยแนะนำตัวแล้ว กรุณาใช้คำสั่ง `/edit-profile` เพื่อแก้ไขข้อมูล", ephemeral=True
+                "คุณเคยแนะนำตัวแล้ว — กดปุ่ม ✏️ แก้ไขชื่อแนะนำตัว (คนเก่า) แทน", ephemeral=True
             )
             return
 
@@ -797,8 +797,18 @@ class IntroductionBoardView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="📝 แนะนำตัว", style=discord.ButtonStyle.primary, custom_id="intro_board_open")
+    @discord.ui.button(label="📝 แนะนำตัว (คนใหม่)", style=discord.ButtonStyle.primary, custom_id="intro_board_open")
     async def open_form(self, interaction: discord.Interaction, button: discord.ui.Button):
+        pool = await db.get_pool()
+        existing = await pool.fetchrow(
+            "SELECT 1 FROM player_profiles WHERE guild_id = $1 AND discord_user_id = $2",
+            interaction.guild.id, interaction.user.id
+        )
+        if existing:
+            await interaction.response.send_message(
+                "คุณเคยแนะนำตัวแล้ว — กดปุ่ม ✏️ แก้ไขชื่อแนะนำตัว (คนเก่า) แทน", ephemeral=True
+            )
+            return
         options = await _get_class_options(interaction.guild)
         if not options:
             await interaction.response.send_message(
@@ -809,6 +819,10 @@ class IntroductionBoardView(discord.ui.View):
             "① เลือกอาชีพที่เล่นก่อน แล้วจะเปิดฟอร์มให้กรอกชื่อในเกมต่อ (ชื่อในดิสใช้ชื่อเล่นในเซิร์ฟเวอร์นี้ให้อัตโนมัติ)",
             view=ClassSelectView(options), ephemeral=True
         )
+
+    @discord.ui.button(label="✏️ แก้ไขชื่อแนะนำตัว (คนเก่า)", style=discord.ButtonStyle.secondary, custom_id="intro_board_edit")
+    async def open_edit(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await _open_edit_profile(interaction)
 
 
 class JobRolesSelectView(discord.ui.View):
@@ -861,8 +875,9 @@ async def setup_introduction(
 
     embed = discord.Embed(
         title="🎮 กระดานแนะนำตัวผู้เล่น",
-        description="กดปุ่มด้านล่างเพื่อแนะนำตัวกับสมาชิกในกิลด์\n"
-                     "กรุณากรอกชื่อในเกม ชื่อใน Discord และอาชีพที่เล่นให้ครบถ้วน",
+        description="**📝 แนะนำตัว (คนใหม่)** — ยังไม่เคยแนะนำตัว กดเพื่อเลือกอาชีพและกรอกชื่อในเกม\n"
+                     "**✏️ แก้ไขชื่อแนะนำตัว (คนเก่า)** — เคยแนะนำตัวแล้ว ต้องการเปลี่ยนชื่อในเกมหรืออาชีพ\n\n"
+                     "ชื่อใน Discord ใช้ชื่อเล่นในเซิร์ฟเวอร์ให้อัตโนมัติ",
         color=0xFEE75C
     )
     await channel.send(embed=embed, view=IntroductionBoardView())
@@ -888,8 +903,8 @@ async def my_profile(interaction: discord.Interaction):
     await interaction.response.send_message(embed=_build_profile_embed(row, interaction.user), ephemeral=True)
 
 
-@tree.command(name="edit-profile", description="แก้ไขข้อมูลแนะนำตัวของตัวเอง")
-async def edit_profile(interaction: discord.Interaction):
+async def _open_edit_profile(interaction: discord.Interaction):
+    """ใช้ร่วมกันระหว่างปุ่ม ✏️ แก้ไขชื่อแนะนำตัว (คนเก่า) บนกระดาน และคำสั่ง /edit-profile"""
     pool = await db.get_pool()
     row = await pool.fetchrow(
         "SELECT * FROM player_profiles WHERE guild_id = $1 AND discord_user_id = $2",
@@ -897,7 +912,7 @@ async def edit_profile(interaction: discord.Interaction):
     )
     if not row:
         await interaction.response.send_message(
-            "คุณยังไม่ได้แนะนำตัว กดปุ่ม 📝 แนะนำตัว ที่กระดานแนะนำตัวก่อน", ephemeral=True
+            "คุณยังไม่ได้แนะนำตัว — กดปุ่ม 📝 แนะนำตัว (คนใหม่) ก่อน", ephemeral=True
         )
         return
     options = await _get_class_options(interaction.guild, current=row["character_class"])
@@ -907,9 +922,15 @@ async def edit_profile(interaction: discord.Interaction):
         )
         return
     await interaction.response.send_message(
-        "เลือกอาชีพที่เล่น (ค่าปัจจุบันถูกเลือกไว้แล้ว) แล้วจะเปิดฟอร์มให้แก้ชื่อในเกมต่อ (ชื่อในดิสใช้ชื่อเล่นในเซิร์ฟเวอร์นี้ให้อัตโนมัติ)",
+        f"ข้อมูลปัจจุบัน: **{row['in_game_name']}** — {row['character_class']}\n"
+        "เลือกอาชีพ (ค่าปัจจุบันถูกเลือกไว้แล้ว) แล้วจะเปิดฟอร์มให้แก้ชื่อในเกมต่อ",
         view=ClassSelectView(options, editing=True, existing=dict(row)), ephemeral=True
     )
+
+
+@tree.command(name="edit-profile", description="แก้ไขข้อมูลแนะนำตัวของตัวเอง")
+async def edit_profile(interaction: discord.Interaction):
+    await _open_edit_profile(interaction)
 
 
 @tree.command(name="reset-introductions", description="ล้างรายชื่อแนะนำตัวทั้งหมด + ถอด Role อาชีพคืนทุกคน (เริ่มเช็คใหม่ตั้งแต่ต้น)")
@@ -1009,6 +1030,54 @@ async def player_list(interaction: discord.Interaction):
             title += f" — หน้า {page_num}/{len(pages)}"
         embed = discord.Embed(title=title, description="\n".join(page_lines), color=0x5865F2)
         await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+@tree.command(name="remind-introduction", description="แจ้งเตือน (แท็ก) สมาชิกที่ยังไม่ได้แนะนำตัว (แอดมิน)")
+@has_mod_perms()
+@app_commands.describe(
+    channel="ห้องที่จะส่งข้อความแจ้งเตือน (ไม่ใส่ = ห้องปัจจุบัน)",
+    role="แจ้งเตือนเฉพาะคนที่มี Role นี้ (ไม่ใส่ = สมาชิกทุกคน)"
+)
+async def remind_introduction(
+    interaction: discord.Interaction,
+    channel: Optional[discord.TextChannel] = None,
+    role: Optional[discord.Role] = None
+):
+    await interaction.response.defer(ephemeral=True)
+    target = channel or interaction.channel
+    pool = await db.get_pool()
+    registered = {
+        r["discord_user_id"] for r in await pool.fetch(
+            "SELECT discord_user_id FROM player_profiles WHERE guild_id = $1", interaction.guild.id
+        )
+    }
+    members = role.members if role else interaction.guild.members
+    missing = [m for m in members if not m.bot and m.id not in registered]
+    if not missing:
+        await interaction.followup.send("✅ ทุกคนแนะนำตัวครบแล้ว", ephemeral=True)
+        return
+
+    settings_row = await pool.fetchrow("SELECT intro_channel FROM intro_settings WHERE guild_id = $1", interaction.guild.id)
+    board = interaction.guild.get_channel(settings_row["intro_channel"]) if settings_row and settings_row["intro_channel"] else None
+    where = f" ที่ {board.mention}" if board else ""
+    header = f"📢 **ยังไม่ได้แนะนำตัว {len(missing)} คน** — กรุณากดปุ่ม 📝 แนะนำตัว (คนใหม่){where}\n"
+
+    # แบ่งข้อความไม่ให้เกิน 2000 ตัวอักษรต่อข้อความ
+    chunks, cur = [], header
+    for m in missing:
+        piece = m.mention + " "
+        if len(cur) + len(piece) > 1900:
+            chunks.append(cur)
+            cur = ""
+        cur += piece
+    chunks.append(cur)
+    try:
+        for c in chunks:
+            await target.send(c, allowed_mentions=discord.AllowedMentions(users=True))
+    except discord.Forbidden:
+        await interaction.followup.send(f"บอทไม่มีสิทธิ์ส่งข้อความใน {target.mention}", ephemeral=True)
+        return
+    await interaction.followup.send(f"ส่งแจ้งเตือน {len(missing)} คนที่ {target.mention} แล้ว", ephemeral=True)
 
 
 @tree.command(name="player-remove", description="ลบข้อมูลแนะนำตัวของสมาชิก (แอดมิน)")
@@ -1588,6 +1657,7 @@ async def help_cmd(interaction: discord.Interaction):
     embed.add_field(name="/player-search", value="ค้นหาผู้เล่นจากชื่อในเกมหรือชื่อในดิส (แอดมิน)", inline=False)
     embed.add_field(name="/player-list", value="ดูตารางรายชื่อผู้เล่นที่แนะนำตัวไว้ทั้งหมด (แอดมิน)", inline=False)
     embed.add_field(name="/player-remove", value="ลบข้อมูลแนะนำตัวของสมาชิก (แอดมิน)", inline=False)
+    embed.add_field(name="/remind-introduction", value="แท็กแจ้งเตือนสมาชิกที่ยังไม่ได้แนะนำตัว (แอดมิน)", inline=False)
     embed.add_field(name="/setup-playerboard", value="ตั้งกระดานรายชื่อสมาชิกแบบรูปภาพ อัปเดตอัตโนมัติ (แอดมิน)", inline=False)
     embed.add_field(name="/party generate", value="สร้างโพยปาร์ตี้ใหม่แบบอัตโนมัติจากรายชื่อผู้เล่น (SUN/Moon/Luna/Lux, ตัดคนลาออก) (แอดมิน)", inline=False)
     embed.add_field(name="/party upload", value="แนบรูปตารางปาร์ตี้ให้บอทอ่านด้วย OCR แล้วจัดโพยตามรูป (แอดมิน)", inline=False)
