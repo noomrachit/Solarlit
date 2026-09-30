@@ -1,4 +1,5 @@
 import os
+import re
 import asyncio
 import logging
 import csv
@@ -979,6 +980,82 @@ async def reset_introductions(interaction: discord.Interaction):
     )
 
 
+@tree.command(name="restore-introductions", description="กู้ข้อมูลแนะนำตัวคืนจาก Embed เก่าในห้องบันทึก (แอดมิน)")
+@has_mod_perms()
+@app_commands.describe(channel="ห้องที่มี Embed แนะนำตัวเก่า (ไม่ใส่ = ห้องที่ตั้งไว้ใน /setup-introduction)")
+async def restore_introductions(interaction: discord.Interaction, channel: Optional[discord.TextChannel] = None):
+    """
+    กู้ player_profiles คืนจาก Embed "🎮 แนะนำตัวผู้เล่น" ที่บอทเคยโพสต์ไว้ (ใช้หลังเผลอ /reset-introductions)
+    ไม่เขียนทับคนที่แนะนำตัวใหม่ไปแล้ว + ติด Role อาชีพคืนให้
+    """
+    await interaction.response.defer(ephemeral=True)
+    pool = await db.get_pool()
+    guild = interaction.guild
+
+    if channel is None:
+        st = await pool.fetchrow("SELECT intro_channel, log_channel FROM intro_settings WHERE guild_id = $1", guild.id)
+        cid = (st["log_channel"] or st["intro_channel"]) if st else None
+        channel = guild.get_channel(cid) if cid else None
+    if channel is None:
+        await interaction.followup.send("ไม่พบห้อง — ใส่ตัวเลือก channel เอง", ephemeral=True)
+        return
+
+    found = {}
+    async for msg in channel.history(limit=None, oldest_first=True):
+        if msg.author.id != bot.user.id:
+            continue
+        for e in msg.embeds:
+            if e.title != "🎮 แนะนำตัวผู้เล่น":
+                continue
+            f = {x.name: x.value for x in e.fields}
+            m = re.search(r"<@!?(\d+)>", f.get("ผู้ลงทะเบียน", ""))
+            if not m or not f.get("ชื่อในเกม") or not f.get("อาชีพที่เล่น"):
+                continue
+            try:
+                created = datetime.strptime(f.get("วันที่ลงทะเบียน", ""), "%d/%m/%Y %H:%M น.").replace(tzinfo=BANGKOK_TZ)
+            except ValueError:
+                created = msg.created_at
+            found[int(m.group(1))] = (f["ชื่อในเกม"], f.get("ชื่อในดิส") or f["ชื่อในเกม"], f["อาชีพที่เล่น"], created)
+
+    if not found:
+        await interaction.followup.send(f"ไม่พบ Embed แนะนำตัวใน {channel.mention}", ephemeral=True)
+        return
+
+    job_roles = {}
+    for r in await pool.fetch("SELECT role_id FROM job_roles WHERE guild_id = $1", guild.id):
+        role = guild.get_role(r["role_id"])
+        if role:
+            job_roles[role.name] = role
+
+    restored = skipped = roles_added = 0
+    for uid, (ign, dname, cls, created) in found.items():
+        res = await pool.execute(
+            """
+            INSERT INTO player_profiles (guild_id, discord_user_id, in_game_name, discord_name, character_class, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (guild_id, discord_user_id) DO NOTHING
+            """,
+            guild.id, uid, ign, dname, cls, created
+        )
+        if res.endswith(" 0"):
+            skipped += 1
+            continue
+        restored += 1
+        member = guild.get_member(uid)
+        role = job_roles.get(cls)
+        if member and role and role not in member.roles:
+            try:
+                await member.add_roles(role, reason="กู้ข้อมูลแนะนำตัว (/restore-introductions)")
+                roles_added += 1
+            except Exception as ex:
+                log.warning(f"ติด role อาชีพคืนให้ {uid} ไม่สำเร็จ: {ex}")
+
+    await refresh_player_board(guild)
+    await interaction.followup.send(
+        f"♻️ กู้ข้อมูลคืน {restored} คน (ข้าม {skipped} คนที่แนะนำตัวใหม่ไปแล้ว), ติด Role อาชีพคืน {roles_added} คน",
+        ephemeral=True
+    )
+
+
 @tree.command(name="player-search", description="ค้นหาผู้เล่นจากชื่อในเกมหรือชื่อในดิส (แอดมิน)")
 @has_mod_perms()
 @app_commands.describe(query="ชื่อในเกมหรือชื่อในดิส (ค้นแบบบางส่วนได้)")
@@ -1657,6 +1734,7 @@ async def help_cmd(interaction: discord.Interaction):
     embed.add_field(name="/player-search", value="ค้นหาผู้เล่นจากชื่อในเกมหรือชื่อในดิส (แอดมิน)", inline=False)
     embed.add_field(name="/player-list", value="ดูตารางรายชื่อผู้เล่นที่แนะนำตัวไว้ทั้งหมด (แอดมิน)", inline=False)
     embed.add_field(name="/player-remove", value="ลบข้อมูลแนะนำตัวของสมาชิก (แอดมิน)", inline=False)
+    embed.add_field(name="/restore-introductions", value="กู้ข้อมูลแนะนำตัวคืนจาก Embed เก่า (แอดมิน)", inline=False)
     embed.add_field(name="/remind-introduction", value="แท็กแจ้งเตือนสมาชิกที่ยังไม่ได้แนะนำตัว (แอดมิน)", inline=False)
     embed.add_field(name="/setup-playerboard", value="ตั้งกระดานรายชื่อสมาชิกแบบรูปภาพ อัปเดตอัตโนมัติ (แอดมิน)", inline=False)
     embed.add_field(name="/party generate", value="สร้างโพยปาร์ตี้ใหม่แบบอัตโนมัติจากรายชื่อผู้เล่น (SUN/Moon/Luna/Lux, ตัดคนลาออก) (แอดมิน)", inline=False)
