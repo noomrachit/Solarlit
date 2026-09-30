@@ -1635,15 +1635,38 @@ class PartyLeaveBoardView(discord.ui.View):
     async def leave_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         pool = await db.get_pool()
         guild_id, uid = interaction.guild.id, interaction.user.id
+        already = await pool.fetchval(
+            "SELECT 1 FROM party_leave WHERE guild_id = $1 AND discord_user_id = $2", guild_id, uid
+        )
+        if already:
+            return await interaction.response.send_message("คุณแจ้งลาไว้อยู่แล้ว", ephemeral=True)
+        in_table = await pool.fetchval(
+            "SELECT 1 FROM party_assignments WHERE guild_id = $1 AND discord_user_id = $2", guild_id, uid
+        )
+        if not in_table:
+            view = await PartyClaimNameView.build(interaction)
+            if view:
+                return await interaction.response.send_message(
+                    "บอทยังไม่รู้ว่าคุณคือชื่อไหนในตาราง (อาจยังไม่ได้แนะนำตัว) — เลือกชื่อของคุณด้านล่าง "
+                    "(บอทจะจำไว้ใช้รอบหน้า):", view=view, ephemeral=True
+                )
+        await _do_leave(interaction)
+
+    @discord.ui.button(label="ยกเลิกลา", style=discord.ButtonStyle.secondary, custom_id="party_cancel_leave_btn")
+    async def cancel_leave_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await _do_cancel_leave(interaction)
+
+
+async def _do_leave(interaction: discord.Interaction, edit: bool = False):
+    """บันทึกลา + เอาออกจากตี้ (+ ดึงพระแทนถ้าเป็นพระ) แล้วอัปเดตกระดาน"""
+    pool = await db.get_pool()
+    guild_id, uid = interaction.guild.id, interaction.user.id
+    if True:
         async with pool.acquire() as conn:
             async with conn.transaction():
-                already = await conn.fetchval(
-                    "SELECT 1 FROM party_leave WHERE guild_id = $1 AND discord_user_id = $2", guild_id, uid
-                )
-                if already:
-                    return await interaction.response.send_message("คุณแจ้งลาไว้อยู่แล้ว", ephemeral=True)
                 await conn.execute(
-                    "INSERT INTO party_leave (guild_id, discord_user_id) VALUES ($1, $2)", guild_id, uid
+                    "INSERT INTO party_leave (guild_id, discord_user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                    guild_id, uid
                 )
                 res = await _apply_leave(conn, guild_id, uid)
 
@@ -1658,11 +1681,68 @@ class PartyLeaveBoardView(discord.ui.View):
                     msg += f"\n🔁 ดึงพระ **{sub['in_game_name']}** จาก {_party_label(sub['group_name'], sub['party_num'])} มาแทนแล้ว"
                 else:
                     msg += "\n⚠️ ไม่มีตี้ไหนมีพระ 2 คน — ตี้นี้จะไม่มีพระ แจ้งแอดมินจัดการ"
-        await interaction.response.send_message(msg, ephemeral=True)
+        if edit:
+            await interaction.response.edit_message(content=msg, view=None)
+        else:
+            await interaction.response.send_message(msg, ephemeral=True)
         await refresh_party_boards(interaction.guild)
 
-    @discord.ui.button(label="ยกเลิกลา", style=discord.ButtonStyle.secondary, custom_id="party_cancel_leave_btn")
-    async def cancel_leave_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+
+class PartyClaimNameView(discord.ui.View):
+    """ให้คนที่ยังไม่ถูกผูกกับตาราง เลือกชื่อตัวเองจากช่องที่ยังไม่มีเจ้าของ แล้วลาได้เลย"""
+
+    def __init__(self, options: list):
+        super().__init__(timeout=180)
+        self.sel = discord.ui.Select(placeholder="เลือกชื่อของคุณในตาราง", options=options)
+        self.sel.callback = self.on_pick
+        self.add_item(self.sel)
+
+    @classmethod
+    async def build(cls, interaction: discord.Interaction):
+        pool = await db.get_pool()
+        rows = await pool.fetch(
+            "SELECT discord_user_id, group_name, party_num, in_game_name, character_class FROM party_assignments "
+            "WHERE guild_id = $1 AND discord_user_id < 0", interaction.guild.id
+        )
+        if not rows:
+            return None
+        me = interaction.user.display_name.lower()
+        rows = sorted(rows, key=lambda r: -difflib.SequenceMatcher(None, me, r["in_game_name"].lower()).ratio())[:25]
+        options = [
+            discord.SelectOption(
+                label=r["in_game_name"][:100],
+                description=f"{_party_label(r['group_name'], r['party_num'])} · {r['character_class']}"[:100],
+                value=str(r["discord_user_id"])
+            ) for r in rows
+        ]
+        return cls(options)
+
+    @discord.ui.button(label="ฉันไม่อยู่ในตาราง", style=discord.ButtonStyle.secondary, row=1)
+    async def not_in_table(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await _do_leave(interaction, edit=True)
+
+    async def on_pick(self, interaction: discord.Interaction):
+        pool = await db.get_pool()
+        fake_id, uid, gid = int(self.sel.values[0]), interaction.user.id, interaction.guild.id
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow(
+                    "UPDATE party_assignments SET discord_user_id = $3 WHERE guild_id = $1 AND discord_user_id = $2 "
+                    "RETURNING in_game_name", gid, fake_id, uid
+                )
+                if row:
+                    await conn.execute(
+                        "INSERT INTO party_name_links (guild_id, discord_user_id, in_game_name) VALUES ($1, $2, $3) "
+                        "ON CONFLICT (guild_id, discord_user_id) DO UPDATE SET in_game_name = $3",
+                        gid, uid, row["in_game_name"]
+                    )
+        if not row:
+            return await interaction.response.edit_message(content="ชื่อนี้ถูกคนอื่นเลือกไปแล้ว กดลาใหม่อีกครั้ง", view=None)
+        await _do_leave(interaction, edit=True)
+
+
+async def _do_cancel_leave(interaction: discord.Interaction):
+    if True:
         pool = await db.get_pool()
         guild_id, uid = interaction.guild.id, interaction.user.id
         note = ""
@@ -1756,17 +1836,28 @@ async def party_upload(interaction: discord.Interaction, image: discord.Attachme
     profiles = [dict(r) for r in await pool.fetch(
         "SELECT discord_user_id, in_game_name, character_class FROM player_profiles WHERE guild_id = $1", guild_id
     )]
+    known = {p["discord_user_id"] for p in profiles}
+    # คนที่ยังไม่แนะนำตัว: ใช้ชื่อที่เคยผูกไว้ตอนกดลา (party_name_links) + ชื่อเล่นในดิส (ต้องคล้ายมาก)
+    for r in await pool.fetch("SELECT discord_user_id, in_game_name FROM party_name_links WHERE guild_id = $1", guild_id):
+        profiles.append({"discord_user_id": r["discord_user_id"], "in_game_name": r["in_game_name"],
+                         "character_class": None, "bonus": 0.01 if r["discord_user_id"] in known else 0.02})
+    for m in interaction.guild.members:
+        if not m.bot:
+            profiles.append({"discord_user_id": m.id, "in_game_name": m.display_name,
+                             "character_class": None, "min_score": 0.8})
     party_ocr.match_names(rows, profiles)
 
     to_insert, unmatched = [], []
     fake_id = 0
     for r in rows:
         p = r["profile"]
-        cls = r["cls"] or (p["character_class"] if p else "?")
+        cls = r["cls"] or (p and p["character_class"]) or "?"
         if p:
-            uid, name = p["discord_user_id"], p["in_game_name"]
+            uid = p["discord_user_id"]
+            # ถ้าจับคู่จากชื่อเล่นในดิส ใช้ชื่อที่อ่านจากรูปแทน
+            name = p["in_game_name"] if p.get("min_score") is None else (r["name_texts"][0] if r["name_texts"] else p["in_game_name"])
         else:
-            fake_id -= 1  # คนที่ไม่เจอในรายชื่อแนะนำตัว ยังแสดงในตาราง แต่กดลาเองไม่ได้
+            fake_id -= 1  # ยังผูกกับคนในดิสไม่ได้ → id ชั่วคราว (ติดลบ) จนกว่าเจ้าตัวจะกดลาแล้วเลือกชื่อ
             uid = fake_id
             name = r["name_texts"][0] if r["name_texts"] else "?"
             unmatched.append(f"{_party_label(r['group'], r['party_num'])} ช่อง {r['slot']}: \"{name}\" ({cls})")
@@ -1805,10 +1896,9 @@ async def party_upload(interaction: discord.Interaction, image: discord.Attachme
     if no_priest:
         msg += f"\n⚠️ ตี้ที่ไม่มีพระ: {', '.join(no_priest)}"
     if unmatched:
-        msg += (f"\n⚠️ ไม่เจอในรายชื่อแนะนำตัว {len(unmatched)} คน (ยังอยู่ในตาราง แต่กดลาเองไม่ได้ / ชื่ออาจอ่านเพี้ยน):\n"
-                + "\n".join(unmatched[:20]))
-        if len(unmatched) > 20:
-            msg += f"\n...และอีก {len(unmatched) - 20} คน"
+        msg += (f"\n⚠️ ยังผูกกับคนในดิสไม่ได้ {len(unmatched)} คน (ส่วนใหญ่คือคนที่ยังไม่แนะนำตัว) — "
+                "ยังอยู่ในตารางตามรูป ตอนกดลาบอทจะให้เลือกชื่อตัวเองจากตาราง แล้วจำไว้ใช้รอบหน้า"
+                "\nแนะนำใช้ `/remind-introduction` แท็กให้ไปแนะนำตัว")
     msg += "\nใช้ `/party rosterboard` และ `/party leaveboard` เพื่อโพสต์กระดาน (ถ้ายังไม่เคยโพสต์)"
     await interaction.followup.send(msg[:2000], ephemeral=True)
     await refresh_party_boards(interaction.guild)

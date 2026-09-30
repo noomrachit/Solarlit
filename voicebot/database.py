@@ -163,5 +163,11 @@ async def init_db():
             ALTER TABLE party_leave ADD COLUMN IF NOT EXISTS sub_party INTEGER;
             ALTER TABLE party_leave ADD COLUMN IF NOT EXISTS sub_slot INTEGER;
             ALTER TABLE party_leave ADD COLUMN IF NOT EXISTS sub_name TEXT;
+            CREATE TABLE IF NOT EXISTS party_name_links (
+                guild_id BIGINT NOT NULL,
+                discord_user_id BIGINT NOT NULL,
+                in_game_name TEXT NOT NULL,
+                PRIMARY KEY (guild_id, discord_user_id)
+            );
             """
         )

@@ -224,16 +224,17 @@ def match_names(rows: list, profiles: list, cutoff: float = 0.55):
                 elif len(pn) >= 4 and (pn in tn or tn in pn):
                     sc = max(sc, 0.8)
                 best = max(best, sc)
-            if best >= cutoff:
-                cands.append((best, ri, pi))
+            if best >= max(cutoff, p.get("min_score", 0)):
+                cands.append((best + p.get("bonus", 0), ri, pi))
     cands.sort(reverse=True)
     used_r, used_p = set(), set()
     for r in rows:
         r["profile"] = None
     for sc, ri, pi in cands:
-        if ri in used_r or pi in used_p:
+        uid = profiles[pi]["discord_user_id"]
+        if ri in used_r or uid in used_p:
             continue
         rows[ri]["profile"] = profiles[pi]
         used_r.add(ri)
-        used_p.add(pi)
+        used_p.add(uid)
     return rows
