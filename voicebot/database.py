@@ -148,3 +148,20 @@ async def init_db():
             ALTER TABLE intro_settings ADD COLUMN IF NOT EXISTS log_channel BIGINT;
             """
         )
+
+        # Migration: ระบบปาร์ตี้ตามตารางหลัก — เก็บเลขช่องในตี้ + ช่องเดิมของคนลา (ไว้ใส่กลับตอนยกเลิกลา)
+        await conn.execute(
+            """
+            ALTER TABLE party_assignments ADD COLUMN IF NOT EXISTS slot INTEGER DEFAULT 0;
+            ALTER TABLE party_leave ADD COLUMN IF NOT EXISTS orig_group TEXT;
+            ALTER TABLE party_leave ADD COLUMN IF NOT EXISTS orig_party INTEGER;
+            ALTER TABLE party_leave ADD COLUMN IF NOT EXISTS orig_slot INTEGER;
+            ALTER TABLE party_leave ADD COLUMN IF NOT EXISTS orig_class TEXT;
+            ALTER TABLE party_leave ADD COLUMN IF NOT EXISTS orig_name TEXT;
+            ALTER TABLE party_leave ADD COLUMN IF NOT EXISTS sub_user_id BIGINT;
+            ALTER TABLE party_leave ADD COLUMN IF NOT EXISTS sub_group TEXT;
+            ALTER TABLE party_leave ADD COLUMN IF NOT EXISTS sub_party INTEGER;
+            ALTER TABLE party_leave ADD COLUMN IF NOT EXISTS sub_slot INTEGER;
+            ALTER TABLE party_leave ADD COLUMN IF NOT EXISTS sub_name TEXT;
+            """
+        )
