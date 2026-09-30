@@ -1209,6 +1209,58 @@ async def remind_introduction(
     await interaction.followup.send(f"ส่งแจ้งเตือน {len(missing)} คนที่ {target.mention} แล้ว", ephemeral=True)
 
 
+@tree.command(name="remind-introduction-dm", description="ส่ง DM แจ้งเตือน (เด้งแจ้งเตือนในดิส) หาคนที่ยังไม่ได้แนะนำตัว (แอดมิน)")
+@has_mod_perms()
+@app_commands.describe(role="ส่งเฉพาะคนที่มี Role นี้ (ไม่ใส่ = สมาชิกทุกคน)")
+async def remind_introduction_dm(interaction: discord.Interaction, role: Optional[discord.Role] = None):
+    await interaction.response.defer(ephemeral=True)
+    pool = await db.get_pool()
+    guild = interaction.guild
+    registered = {
+        r["discord_user_id"] for r in await pool.fetch(
+            "SELECT discord_user_id FROM player_profiles WHERE guild_id = $1", guild.id
+        )
+    }
+    members = role.members if role else guild.members
+    missing = [m for m in members if not m.bot and m.id not in registered]
+    if not missing:
+        return await interaction.followup.send("✅ ทุกคนแนะนำตัวครบแล้ว", ephemeral=True)
+
+    st = await pool.fetchrow("SELECT intro_channel FROM intro_settings WHERE guild_id = $1", guild.id)
+    board = guild.get_channel(st["intro_channel"]) if st and st["intro_channel"] else None
+    embed = discord.Embed(
+        title="📢 คุณยังไม่ได้แนะนำตัว",
+        description=(
+            f"เซิร์ฟเวอร์ **{guild.name}** ขอให้แนะนำตัวผู้เล่น\n"
+            + (f"ไปที่ {board.mention} แล้วกดปุ่ม **📝 แนะนำตัว (คนใหม่)**" if board
+               else "ไปที่ห้องกระดานแนะนำตัว แล้วกดปุ่ม **📝 แนะนำตัว (คนใหม่)**")
+        ),
+        color=0xFEE75C
+    )
+    view = None
+    if board:
+        view = discord.ui.View()
+        view.add_item(discord.ui.Button(label="ไปที่กระดานแนะนำตัว", url=board.jump_url))
+
+    sent, failed = 0, []
+    for m in missing:
+        try:
+            if view:
+                await m.send(embed=embed, view=view)
+            else:
+                await m.send(embed=embed)
+            sent += 1
+        except (discord.Forbidden, discord.HTTPException):
+            failed.append(m)
+        await asyncio.sleep(1)  # กันโดน rate limit ของดิส
+
+    msg = f"📨 ส่ง DM แจ้งเตือนสำเร็จ {sent}/{len(missing)} คน"
+    if failed:
+        msg += (f"\n⚠️ ส่งไม่ได้ {len(failed)} คน (ปิดรับ DM) — ใช้ `/remind-introduction` แท็กในห้องแทน:\n"
+                + " ".join(m.mention for m in failed[:40]))
+    await interaction.followup.send(msg[:2000], ephemeral=True)
+
+
 @tree.command(name="player-remove", description="ลบข้อมูลแนะนำตัวของสมาชิก (แอดมิน)")
 @has_mod_perms()
 @app_commands.describe(member="สมาชิกที่จะลบข้อมูลแนะนำตัว")
@@ -2021,6 +2073,7 @@ async def help_cmd(interaction: discord.Interaction):
     embed.add_field(name="/player-search", value="ค้นหาผู้เล่นจากชื่อในเกมหรือชื่อในดิส (แอดมิน)", inline=False)
     embed.add_field(name="/player-list", value="ดูตารางรายชื่อผู้เล่นที่แนะนำตัวไว้ทั้งหมด (แอดมิน)", inline=False)
     embed.add_field(name="/player-remove", value="ลบข้อมูลแนะนำตัวของสมาชิก (แอดมิน)", inline=False)
+    embed.add_field(name="/remind-introduction-dm", value="ส่ง DM เด้งแจ้งเตือนหาคนที่ยังไม่แนะนำตัว (แอดมิน)", inline=False)
     embed.add_field(name="/restore-introductions", value="กู้ข้อมูลแนะนำตัวคืนจาก Embed เก่า (แอดมิน)", inline=False)
     embed.add_field(name="/remind-introduction", value="แท็กแจ้งเตือนสมาชิกที่ยังไม่ได้แนะนำตัว (แอดมิน)", inline=False)
     embed.add_field(name="/setup-playerboard", value="ตั้งกระดานรายชื่อสมาชิกแบบรูปภาพ อัปเดตอัตโนมัติ (แอดมิน)", inline=False)
