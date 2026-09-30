@@ -934,16 +934,53 @@ async def edit_profile(interaction: discord.Interaction):
     await _open_edit_profile(interaction)
 
 
+class ConfirmView(discord.ui.View):
+    """ปุ่มยืนยัน/ยกเลิก — กดได้เฉพาะคนที่สั่งคำสั่ง, หมดเวลา 60 วินาที, กดได้ครั้งเดียว"""
+
+    def __init__(self, owner_id: int, action, *, danger: bool = False):
+        super().__init__(timeout=60)
+        self.owner_id = owner_id
+        self.action = action
+        self.confirm_btn.style = discord.ButtonStyle.danger if danger else discord.ButtonStyle.success
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("ปุ่มนี้สำหรับคนที่สั่งคำสั่งเท่านั้น", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="✅ ยืนยัน", style=discord.ButtonStyle.danger)
+    async def confirm_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.stop()
+        await interaction.response.edit_message(content="⏳ กำลังดำเนินการ...", view=None)
+        await self.action(interaction)
+
+    @discord.ui.button(label="❌ ยกเลิก", style=discord.ButtonStyle.secondary)
+    async def cancel_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.stop()
+        await interaction.response.edit_message(content="ยกเลิกแล้ว ไม่มีอะไรเปลี่ยนแปลง", view=None)
+
+
 @tree.command(name="reset-introductions", description="ล้างรายชื่อแนะนำตัวทั้งหมด + ถอด Role อาชีพคืนทุกคน (เริ่มเช็คใหม่ตั้งแต่ต้น)")
 @has_mod_perms()
 async def reset_introductions(interaction: discord.Interaction):
     """
     รีเซ็ตระบบแนะนำตัวทั้งกิลด์ — ลบทุกแถวใน player_profiles และถอด Role อาชีพ (job_roles) ที่ติดตัว
     สมาชิกแต่ละคนออก เพื่อให้ทุกคนกดปุ่ม 📝 แนะนำตัว ใหม่ได้ทันที (ปกติจะโดนกันด้วยเช็ค "คุณเคยแนะนำตัวแล้ว")
-    ไม่มีขั้นตอนยืนยันซ้อน (ตามแบบ /party cancel) — คำสั่งนี้จำกัดสิทธิ์ด้วย has_mod_perms() อยู่แล้ว
+    มีขั้นยืนยันด้วยปุ่ม (ConfirmView) กันเผลอกด + จำกัดสิทธิ์ด้วย has_mod_perms()
     ทำงานได้แม้บอทไม่มีสิทธิ์ถอด role บางคน (เช่น role บอทอยู่ต่ำกว่าในลำดับชั้น) จะข้ามคนนั้นไปแบบ log ไว้ ไม่ทำให้คำสั่งทั้งหมดล้ม
     """
-    await interaction.response.defer(ephemeral=True)
+    pool = await db.get_pool()
+    count = await pool.fetchval("SELECT COUNT(*) FROM player_profiles WHERE guild_id = $1", interaction.guild.id)
+    await interaction.response.send_message(
+        f"⚠️ **ยืนยันรีเซ็ตระบบแนะนำตัว?**\n"
+        f"จะลบรายชื่อทั้งหมด **{count} คน** และถอด Role อาชีพออกจากทุกคน\n"
+        "กดยืนยันภายใน 60 วินาที ถ้าไม่ต้องการให้กดยกเลิก",
+        view=ConfirmView(interaction.user.id, _do_reset_introductions, danger=True), ephemeral=True
+    )
+
+
+async def _do_reset_introductions(interaction: discord.Interaction):
     pool = await db.get_pool()
 
     rows = await pool.fetch(
@@ -988,7 +1025,20 @@ async def restore_introductions(interaction: discord.Interaction, channel: Optio
     กู้ player_profiles คืนจาก Embed "🎮 แนะนำตัวผู้เล่น" ที่บอทเคยโพสต์ไว้ (ใช้หลังเผลอ /reset-introductions)
     ไม่เขียนทับคนที่แนะนำตัวใหม่ไปแล้ว + ติด Role อาชีพคืนให้
     """
-    await interaction.response.defer(ephemeral=True)
+    ch_text = channel.mention if channel else "ห้องที่ตั้งไว้ใน /setup-introduction"
+
+    async def run(inter: discord.Interaction):
+        await _do_restore_introductions(inter, channel)
+
+    await interaction.response.send_message(
+        f"♻️ **ยืนยันกู้ข้อมูลแนะนำตัว?**\n"
+        f"จะอ่าน Embed แนะนำตัวเก่าจาก {ch_text} แล้วใส่รายชื่อ + Role อาชีพคืน\n"
+        "(ไม่เขียนทับคนที่แนะนำตัวใหม่ไปแล้ว) กดยืนยันภายใน 60 วินาที",
+        view=ConfirmView(interaction.user.id, run), ephemeral=True
+    )
+
+
+async def _do_restore_introductions(interaction: discord.Interaction, channel: Optional[discord.TextChannel]):
     pool = await db.get_pool()
     guild = interaction.guild
 
