@@ -617,6 +617,62 @@ class RelayUnit:
                 ephemeral=True
             )
 
+        @relay_group.command(
+            name="bindspeakers",
+            description="ผูกบอทพูดสูงสุด 5 ตัวพร้อมกันในคำสั่งเดียว (เลือกตัวว่างให้อัตโนมัติ) — เข้า/ออกห้องตามคนเข้า-ออก"
+        )
+        @has_relay_perms()
+        @app_commands.describe(
+            channel1="ห้องย่อยที่ 1 (บังคับ)",
+            channel2="ห้องย่อยที่ 2 (ไม่ใส่ = ข้าม)",
+            channel3="ห้องย่อยที่ 3 (ไม่ใส่ = ข้าม)",
+            channel4="ห้องย่อยที่ 4 (ไม่ใส่ = ข้าม)",
+            channel5="ห้องย่อยที่ 5 (ไม่ใส่ = ข้าม)",
+        )
+        async def relay_bindspeakers(
+            interaction: discord.Interaction,
+            channel1: discord.VoiceChannel,
+            channel2: Optional[discord.VoiceChannel] = None,
+            channel3: Optional[discord.VoiceChannel] = None,
+            channel4: Optional[discord.VoiceChannel] = None,
+            channel5: Optional[discord.VoiceChannel] = None,
+        ):
+            """
+            ผูกบอทพูดหลายตัวพร้อมกันในคำสั่งเดียว — หาเลขบอทพูดที่ "ว่าง" (ไม่มีใคร static-bind ไว้เลย
+            ไม่ว่าจะเป็นของ unit นี้หรือหัวหน้าตัวอื่น) ให้อัตโนมัติทีละห้องตามลำดับที่กรอกมา
+            ต่างจาก /relay bindspeaker ตรงที่ไม่ต้องระบุเลขบอทพูดเอง — เหมาะกับตอนเพิ่มบอทพูดมาทั้งชุด (เช่น 5 ตัว)
+            แล้วอยากผูกเข้าห้องย่อย 5 ห้องรวดเดียว
+            """
+            channels = [c for c in (channel1, channel2, channel3, channel4, channel5) if c is not None]
+
+            success_lines = []
+            fail_lines = []
+            for channel in channels:
+                idx0 = None
+                for i in range(len(pool.speaker_bots)):
+                    if pool.bind_owner.get(i) is None:
+                        idx0 = i
+                        break
+
+                if idx0 is None:
+                    fail_lines.append(f"❌ {channel.mention}: ไม่มีบอทพูดว่างเหลือแล้ว (ผูกครบทั้ง {len(pool.speaker_bots)} ตัว)")
+                    continue
+
+                other = pool.try_bind(idx0, unit)
+                if other is not None:
+                    # แทบไม่เกิด เพราะเพิ่งเช็ค bind_owner ว่าง แต่กันไว้เผื่อ race ระหว่างคำสั่งชนกัน
+                    fail_lines.append(f"❌ {channel.mention}: บอทพูดตัวที่ {idx0 + 1} ถูก {other.name} ผูกไปพอดี ลองใหม่อีกครั้ง")
+                    continue
+
+                unit.speaker_bindings[idx0] = {"channel_id": channel.id}
+                success_lines.append(f"🔗 บอทพูดตัวที่ {idx0 + 1} → {channel.mention}")
+
+            header = f"ผูกสำเร็จ {len(success_lines)}/{len(channels)} ห้อง ({unit.name})"
+            lines = [header] + success_lines + fail_lines
+            lines.append("")
+            lines.append("ต่อไปนี้: มีคนเข้าห้องย่อยไหน (คนแรก) → บอทพูดที่ผูกไว้ตามเข้าอัตโนมัติ / ห้องว่าง → ตามออกอัตโนมัติ")
+            await interaction.response.send_message("\n".join(lines), ephemeral=True)
+
         @relay_group.command(name="unbind", description="ยกเลิกการผูกอัตโนมัติทั้งหมดของหัวหน้าตัวนี้ (บอทจะไม่ตามเข้า-ออกห้องไหนอีก)")
         @has_relay_perms()
         async def relay_unbind(interaction: discord.Interaction):
