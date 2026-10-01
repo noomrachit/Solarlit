@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>นโยบายความเป็นส่วนตัว — SOLARLIT OPS</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans+Thai:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0a0e13; --panel:#121920; --panel-2:#0e141a;
+    --line:#233039; --line-soft:#1a232b;
+    --text:#e8edf2; --text-dim:#8fa0ab; --text-faint:#4f6068;
+    --amber:#ff9f1c; --amber-dim:#c97e18; --cyan:#3ed8c3; --cyan-dim:#2a9c8d;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{background:var(--bg); color:var(--text); font-family:'IBM Plex Sans Thai', sans-serif; line-height:1.8; -webkit-font-smoothing:antialiased;}
+  .mono{font-family:'IBM Plex Mono', monospace;}
+  .wrap{max-width:820px; margin:0 auto; padding:0 28px;}
+  a{color:var(--cyan);}
+  nav{position:sticky; top:0; z-index:50; background:rgba(10,14,19,0.85); backdrop-filter:blur(10px); border-bottom:1px solid var(--line-soft);}
+  nav .wrap{max-width:1120px; display:flex; align-items:center; justify-content:space-between; height:64px;}
+  .brand{display:flex; align-items:center; gap:10px; font-family:'IBM Plex Mono', monospace; font-weight:600; font-size:15px; letter-spacing:0.08em; text-decoration:none; color:var(--text);}
+  .brand .dot{width:8px; height:8px; border-radius:50%; background:var(--cyan); box-shadow:0 0 8px var(--cyan);}
+  main{padding:70px 0 90px;}
+  .eyebrow{font-family:'IBM Plex Mono', monospace; font-size:12px; letter-spacing:0.16em; color:var(--cyan); margin-bottom:16px;}
+  h1{font-family:'IBM Plex Mono', monospace; font-size:clamp(26px,4vw,38px); margin-bottom:8px;}
+  .updated{color:var(--text-faint); font-size:13px; font-family:'IBM Plex Mono', monospace; margin-bottom:48px;}
+  h2{font-family:'IBM Plex Mono', monospace; font-size:17px; color:var(--amber); margin:40px 0 14px;}
+  p, li{color:var(--text-dim); font-size:14.5px; margin-bottom:10px;}
+  ul{padding-left:20px; margin-bottom:10px;}
+  table{width:100%; border-collapse:collapse; margin:14px 0 20px; border:1px solid var(--line); border-radius:6px; overflow:hidden;}
+  th, td{text-align:left; padding:10px 14px; font-size:13.5px; border-bottom:1px solid var(--line-soft);}
+  th{background:var(--panel-2); font-family:'IBM Plex Mono', monospace; font-size:11px; letter-spacing:0.06em; color:var(--text-faint);}
+  td{color:var(--text-dim);}
+  footer{padding:40px 0; border-top:1px solid var(--line-soft); font-size:12.5px; color:var(--text-faint); font-family:'IBM Plex Mono', monospace;}
+</style>
+</head>
+<body>
+
+<nav><div class="wrap"><a href="index.html" class="brand"><span class="dot"></span>SOLARLIT&nbsp;OPS</a></div></nav>
+
+<main>
+  <div class="wrap">
+    <div class="eyebrow">LEGAL // PRIVACY POLICY</div>
+    <h1>นโยบายความเป็นส่วนตัว</h1>
+    <div class="updated">อัปเดตล่าสุด: 30 กันยายน 2026</div>
+
+    <h2>1. ข้อมูลที่เก็บ</h2>
+    <table>
+      <thead><tr><th>ข้อมูล</th><th>เก็บเมื่อไหร่</th></tr></thead>
+      <tbody>
+        <tr><td>Discord user ID, username, avatar</td><td>เมื่อ login เข้า dashboard ผ่าน Discord OAuth</td></tr>
+        <tr><td>รายชื่อเซิร์ฟเวอร์ (guild) ที่คุณเป็นแอดมิน/เจ้าของ</td><td>เมื่อ login (ใช้กรองว่าคุณจัดการเซิร์ฟเวอร์ไหนได้)</td></tr>
+        <tr><td>การตั้งค่าบอทต่อเซิร์ฟเวอร์ (ช่อง log, ข้อความต้อนรับ, คำต้องห้าม ฯลฯ)</td><td>เมื่อแอดมินตั้งค่าผ่านคำสั่งหรือ dashboard</td></tr>
+        <tr><td>ประวัติเข้า-ออกห้องเสียง (เฉพาะห้องที่เปิด /track add)</td><td>เมื่อสมาชิกเข้า/ออกห้องเสียงที่ถูกติดตาม</td></tr>
+        <tr><td>ข้อมูลการชำระเงิน (สถานะสมัครสมาชิก, tier)</td><td>เมื่อสมัคร/ต่ออายุแพ็กเกจ — เลขบัตรจริงประมวลผลและเก็บโดย Omise เท่านั้น ไม่ผ่านระบบของเรา</td></tr>
+      </tbody>
+    </table>
+
+    <h2>2. สิ่งที่เราไม่เก็บ</h2>
+    <p>เราไม่เก็บเนื้อหาข้อความแชททั่วไป ไม่บันทึกเสียงจากห้อง Voice Relay (ถ่ายทอดสดแบบ pass-through ไม่มีการอัดหรือเก็บไฟล์เสียงไว้)</p>
+
+    <h2>3. การใช้ข้อมูล</h2>
+    <p>ข้อมูลที่เก็บใช้เพื่อให้บริการฟีเจอร์ที่คุณเปิดใช้งานเท่านั้น (เช่น แสดงสถิติห้องเสียง, ตรวจสอบสิทธิ์แอดมิน, จัดการสถานะการสมัครสมาชิก) ไม่นำไปขายหรือแบ่งปันให้บุคคลที่สามเพื่อการตลาด</p>
+
+    <h2>4. ผู้ให้บริการภายนอกที่เกี่ยวข้อง</h2>
+    <ul>
+      <li><b>Discord</b> — ระบบยืนยันตัวตน (OAuth) และช่องทางรันบอท</li>
+      <li><b>Omise</b> — ประมวลผลการชำระเงิน</li>
+      <li><b>Railway</b> — โฮสต์เซิร์ฟเวอร์และฐานข้อมูล</li>
+    </ul>
+
+    <h2>5. สิทธิ์ของคุณ</h2>
+    <p>แอดมินเซิร์ฟเวอร์ลบข้อมูลที่บอทเก็บไว้ได้เองผ่านคำสั่งที่เกี่ยวข้อง (เช่น /track remove เพื่อหยุด+ลบการติดตามห้อง) หรือเชิญบอทออกจากเซิร์ฟเวอร์เพื่อหยุดการเก็บข้อมูลทั้งหมดของเซิร์ฟเวอร์นั้น</p>
+
+    <h2>6. ติดต่อ</h2>
+    <p>คำถามเรื่องความเป็นส่วนตัว ติดต่อผ่านช่องทางที่ระบุในเซิร์ฟเวอร์ Discord สนับสนุนของ SOLARLIT OPS</p>
+  </div>
+</main>
+
+<footer><div class="wrap">SOLARLIT OPS © 2026</div></footer>
+
+</body>
+</html>

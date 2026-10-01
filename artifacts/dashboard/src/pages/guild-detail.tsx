@@ -226,8 +226,90 @@ function SettingsTab({ guildId }: { guildId: string }) {
           </CardContent>
         </Card>
 
-        <Button 
-          onClick={handleSave} 
+        <Card className="bg-card/30 border-border/50">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0">
+            <CardTitle className="uppercase tracking-wider text-sm font-mono text-primary">ระบบป้องกัน (Anti-raid)</CardTitle>
+            {localSettings.antiraidLockdown && (
+              <Badge variant="destructive" className="font-mono text-[10px] uppercase">🔒 Lockdown</Badge>
+            )}
+          </CardHeader>
+          <CardContent className="space-y-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="font-mono text-sm uppercase">เปิด/ปิดระบบป้องกัน</div>
+                <div className="text-xs text-muted-foreground">กันบอทปลอม/สแปมเข้าเซิร์ฟเวอร์พร้อมกัน</div>
+              </div>
+              <Switch
+                checked={localSettings.antiraidEnabled}
+                onCheckedChange={(c) => setLocalSettings({ ...localSettings, antiraidEnabled: c })}
+              />
+            </div>
+
+            <div className={`space-y-4 pt-4 border-t border-border/50 ${!localSettings.antiraidEnabled ? 'opacity-50 pointer-events-none' : ''}`}>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-mono text-muted-foreground uppercase">เกณฑ์คน (raid)</label>
+                  <Input
+                    type="number"
+                    value={localSettings.antiraidJoinThreshold ?? 5}
+                    onChange={(e) => setLocalSettings({ ...localSettings, antiraidJoinThreshold: parseInt(e.target.value) || 0 })}
+                    className="font-mono"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-mono text-muted-foreground uppercase">ภายใน (วินาที)</label>
+                  <Input
+                    type="number"
+                    value={localSettings.antiraidJoinWindowSeconds ?? 10}
+                    onChange={(e) => setLocalSettings({ ...localSettings, antiraidJoinWindowSeconds: parseInt(e.target.value) || 0 })}
+                    className="font-mono"
+                  />
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-mono text-muted-foreground uppercase">อายุบัญชีขั้นต่ำ (ชั่วโมง)</label>
+                <Input
+                  type="number"
+                  value={localSettings.antiraidMinAccountAgeHours ?? 24}
+                  onChange={(e) => setLocalSettings({ ...localSettings, antiraidMinAccountAgeHours: parseInt(e.target.value) || 0 })}
+                  className="font-mono w-32"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-mono text-muted-foreground uppercase">การกระทำ</label>
+                <div className="flex gap-2">
+                  {["kick", "ban", "timeout"].map((a) => (
+                    <button
+                      key={a}
+                      type="button"
+                      onClick={() => setLocalSettings({ ...localSettings, antiraidAction: a })}
+                      className={`px-3 py-1.5 text-xs font-mono uppercase border rounded-sm transition-colors ${
+                        localSettings.antiraidAction === a
+                          ? "bg-primary text-primary-foreground border-primary"
+                          : "border-border/50 text-muted-foreground hover:border-border"
+                      }`}
+                    >
+                      {a === "kick" ? "เตะ" : a === "ban" ? "แบน" : "Timeout"}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="flex items-center justify-between pt-2">
+                <div>
+                  <div className="font-mono text-sm">Lockdown ทันที</div>
+                  <div className="text-xs text-muted-foreground">บล็อกสมาชิกใหม่ทุกคนจนกว่าจะปิด</div>
+                </div>
+                <Switch
+                  checked={!!localSettings.antiraidLockdown}
+                  onCheckedChange={(c) => setLocalSettings({ ...localSettings, antiraidLockdown: c })}
+                />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Button
+          onClick={handleSave}
           disabled={updateSettings.isPending}
           className="w-full font-mono uppercase tracking-widest h-12"
         >
@@ -666,7 +748,7 @@ function BillingTab({ guildId }: { guildId: string }) {
         </CardContent>
       </Card>
 
-      <div className="grid md:grid-cols-3 gap-4">
+      <div className="grid md:grid-cols-2 gap-4">
         {config && (Object.entries(config.plans) as [PlanTier, typeof config.plans[PlanTier]][]).map(([tier, plan]) => {
           const isCurrent = status?.tier === tier && status?.status === "active"
           return (

@@ -436,6 +436,18 @@ components:
           type: boolean
         mentionLimit:
           type: number
+        antiraidEnabled:
+          type: boolean
+        antiraidJoinThreshold:
+          type: number
+        antiraidJoinWindowSeconds:
+          type: number
+        antiraidMinAccountAgeHours:
+          type: number
+        antiraidAction:
+          type: string
+        antiraidLockdown:
+          type: boolean
       required:
         - guildId
         - prefix
@@ -443,6 +455,12 @@ components:
         - antiInvite
         - antiMentionSpam
         - mentionLimit
+        - antiraidEnabled
+        - antiraidJoinThreshold
+        - antiraidJoinWindowSeconds
+        - antiraidMinAccountAgeHours
+        - antiraidAction
+        - antiraidLockdown
 
     GuildSettingsInput:
       type: object
@@ -465,6 +483,18 @@ components:
           type: boolean
         mentionLimit:
           type: number
+        antiraidEnabled:
+          type: boolean
+        antiraidJoinThreshold:
+          type: number
+        antiraidJoinWindowSeconds:
+          type: number
+        antiraidMinAccountAgeHours:
+          type: number
+        antiraidAction:
+          type: string
+        antiraidLockdown:
+          type: boolean
 
     Warning:
       type: object
