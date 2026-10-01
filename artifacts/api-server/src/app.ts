@@ -2,6 +2,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import fs from "node:fs";
 import express, { type Express } from "express";
+import rateLimit from "express-rate-limit";
 import cors from "cors";
 import pinoHttp from "pino-http";
 import session from "express-session";
@@ -61,8 +62,16 @@ app.use(express.urlencoded({ extended: true }));
 app.use("/api", router);
 
 if (fs.existsSync(dashboardDist)) {
-  app.use(express.static(dashboardDist));
-  app.get(/.*/, (req, res, next) => {
+  // Dashboard static/SPA-fallback routes read from disk on every request;
+  // rate-limit them against abusive request floods.
+  const dashboardRateLimit = rateLimit({
+    windowMs: 60 * 1000,
+    limit: 300,
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+  app.use(dashboardRateLimit, express.static(dashboardDist));
+  app.get(/.*/, dashboardRateLimit, (req, res, next) => {
     if (req.path.startsWith("/api")) {
       next();
       return;
