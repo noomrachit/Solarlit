@@ -16,8 +16,8 @@ const router: IRouter = Router();
 // relayBotLimit counts the listener bot ("หัวหน้า") + speaker bots
 // ("ลูกน้อง") together, same as voicerelay/relay_bot.py's `limit` check.
 export const PLANS = {
-  standard: { name: "STANDARD", priceThb: 120, relayBotLimit: 6 },
-  pro: { name: "PRO", priceThb: 250, relayBotLimit: 12 },
+  standard: { name: "STANDARD", priceThb: 120, relayBotLimit: 11 },
+  pro: { name: "PRO", priceThb: 250, relayBotLimit: 17 },
 } as const;
 export type PlanTier = keyof typeof PLANS;
 const TRIAL_RELAY_BOT_LIMIT = PLANS.pro.relayBotLimit; // full access during trial

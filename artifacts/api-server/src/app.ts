@@ -1,11 +1,21 @@
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import fs from "node:fs";
 import express, { type Express } from "express";
+import rateLimit from "express-rate-limit";
 import cors from "cors";
 import pinoHttp from "pino-http";
 import session from "express-session";
 import router from "./routes";
 import { logger } from "./lib/logger";
 const app: Express = express();
+
+// Dashboard is built separately (see package.json's "build" script) into
+// artifacts/dashboard/dist/public and served from here so the dashboard and
+// API ship as a single deployable service.
+const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(moduleDir, "..", "..", "..");
+const dashboardDist = path.resolve(repoRoot, "artifacts/dashboard/dist/public");
 
 const sessionSecret = process.env["SESSION_SECRET"];
 if (!sessionSecret) {
@@ -51,24 +61,28 @@ app.use(express.urlencoded({ extended: true }));
 
 app.use("/api", router);
 
-// Serve the dashboard's built static files from the same origin/domain as
-// the API. Same-origin is required: the dashboard's fetch calls use relative
-// "/api/..." paths and the session cookie is scoped to this origin — split
-// across two Railway domains, both auth and API calls would break.
-// Built by `pnpm --filter @workspace/dashboard run build` (see build command
-// on this Railway service) into artifacts/dashboard/dist/public.
-const dashboardDistPath = path.join(
-  __dirname,
-  "..",
-  "..",
-  "dashboard",
-  "dist",
-  "public",
-);
-app.use(express.static(dashboardDistPath));
-// SPA fallback for any non-/api route (client-side routing via wouter).
-app.get(/^\/(?!api\/).*/, (_req, res) => {
-  res.sendFile(path.join(dashboardDistPath, "index.html"));
-});
+if (fs.existsSync(dashboardDist)) {
+  // Dashboard static/SPA-fallback routes read from disk on every request;
+  // rate-limit them against abusive request floods.
+  const dashboardRateLimit = rateLimit({
+    windowMs: 60 * 1000,
+    limit: 300,
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+  app.use(dashboardRateLimit, express.static(dashboardDist));
+  app.get(/.*/, dashboardRateLimit, (req, res, next) => {
+    if (req.path.startsWith("/api")) {
+      next();
+      return;
+    }
+    res.sendFile(path.join(dashboardDist, "index.html"));
+  });
+} else {
+  logger.warn(
+    { dashboardDist },
+    "Dashboard build output not found; static serving disabled",
+  );
+}
 
 export default app;

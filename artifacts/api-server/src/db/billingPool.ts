@@ -53,5 +53,11 @@ export async function ensureBillingSchema(): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
+  // One-time migration: the 'starter' tier was removed in favor of a
+  // standard/pro split — move any existing starter subscribers to standard.
+  await billingPool.query(`
+    UPDATE guild_subscriptions SET tier = 'standard', updated_at = now()
+    WHERE tier = 'starter';
+  `);
   logger.info("Billing schema ensured (guild_subscriptions)");
 }

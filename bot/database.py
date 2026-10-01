@@ -195,3 +195,15 @@ async def init_db():
             ALTER TABLE settings ADD COLUMN IF NOT EXISTS dashboard_channel BIGINT;
             """
         )
+
+        # Migration: ระบบป้องกัน Anti-raid (กันบอทปลอม/สแปมเข้าเซิร์ฟเวอร์พร้อมกัน)
+        await conn.execute(
+            """
+            ALTER TABLE settings ADD COLUMN IF NOT EXISTS antiraid_enabled BOOLEAN DEFAULT FALSE;
+            ALTER TABLE settings ADD COLUMN IF NOT EXISTS antiraid_join_threshold INTEGER DEFAULT 5;
+            ALTER TABLE settings ADD COLUMN IF NOT EXISTS antiraid_join_window_seconds INTEGER DEFAULT 10;
+            ALTER TABLE settings ADD COLUMN IF NOT EXISTS antiraid_min_account_age_hours INTEGER DEFAULT 24;
+            ALTER TABLE settings ADD COLUMN IF NOT EXISTS antiraid_action TEXT DEFAULT 'kick';
+            ALTER TABLE settings ADD COLUMN IF NOT EXISTS antiraid_lockdown BOOLEAN DEFAULT FALSE;
+            """
+        )

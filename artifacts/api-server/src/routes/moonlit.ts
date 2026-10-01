@@ -145,6 +145,12 @@ router.get(
         antiInvite: Boolean(row.anti_invite),
         antiMentionSpam: Boolean(row.anti_mention_spam),
         mentionLimit: Number(row.mention_limit ?? 5),
+        antiraidEnabled: Boolean(row.antiraid_enabled),
+        antiraidJoinThreshold: Number(row.antiraid_join_threshold ?? 5),
+        antiraidJoinWindowSeconds: Number(row.antiraid_join_window_seconds ?? 10),
+        antiraidMinAccountAgeHours: Number(row.antiraid_min_account_age_hours ?? 24),
+        antiraidAction: row.antiraid_action ?? "kick",
+        antiraidLockdown: Boolean(row.antiraid_lockdown),
       };
       res.json(GetGuildSettingsResponse.parse(data));
     } finally {
@@ -172,8 +178,10 @@ router.put(
       await client.query(
         `INSERT INTO settings (
           guild_id, log_channel, welcome_channel, welcome_message, leave_message,
-          prefix, automod_enabled, anti_invite, anti_mention_spam, mention_limit
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+          prefix, automod_enabled, anti_invite, anti_mention_spam, mention_limit,
+          antiraid_enabled, antiraid_join_threshold, antiraid_join_window_seconds,
+          antiraid_min_account_age_hours, antiraid_action, antiraid_lockdown
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
         ON CONFLICT (guild_id) DO UPDATE SET
           log_channel = COALESCE($2, settings.log_channel),
           welcome_channel = COALESCE($3, settings.welcome_channel),
@@ -183,7 +191,13 @@ router.put(
           automod_enabled = COALESCE($7, settings.automod_enabled),
           anti_invite = COALESCE($8, settings.anti_invite),
           anti_mention_spam = COALESCE($9, settings.anti_mention_spam),
-          mention_limit = COALESCE($10, settings.mention_limit)`,
+          mention_limit = COALESCE($10, settings.mention_limit),
+          antiraid_enabled = COALESCE($11, settings.antiraid_enabled),
+          antiraid_join_threshold = COALESCE($12, settings.antiraid_join_threshold),
+          antiraid_join_window_seconds = COALESCE($13, settings.antiraid_join_window_seconds),
+          antiraid_min_account_age_hours = COALESCE($14, settings.antiraid_min_account_age_hours),
+          antiraid_action = COALESCE($15, settings.antiraid_action),
+          antiraid_lockdown = COALESCE($16, settings.antiraid_lockdown)`,
         [
           BigInt(rawId),
           b.logChannel ? BigInt(b.logChannel) : null,
@@ -195,6 +209,12 @@ router.put(
           b.antiInvite ?? null,
           b.antiMentionSpam ?? null,
           b.mentionLimit ?? null,
+          b.antiraidEnabled ?? null,
+          b.antiraidJoinThreshold ?? null,
+          b.antiraidJoinWindowSeconds ?? null,
+          b.antiraidMinAccountAgeHours ?? null,
+          b.antiraidAction ?? null,
+          b.antiraidLockdown ?? null,
         ],
       );
 
@@ -216,6 +236,12 @@ router.put(
         antiInvite: Boolean(row.anti_invite),
         antiMentionSpam: Boolean(row.anti_mention_spam),
         mentionLimit: Number(row.mention_limit ?? 5),
+        antiraidEnabled: Boolean(row.antiraid_enabled),
+        antiraidJoinThreshold: Number(row.antiraid_join_threshold ?? 5),
+        antiraidJoinWindowSeconds: Number(row.antiraid_join_window_seconds ?? 10),
+        antiraidMinAccountAgeHours: Number(row.antiraid_min_account_age_hours ?? 24),
+        antiraidAction: row.antiraid_action ?? "kick",
+        antiraidLockdown: Boolean(row.antiraid_lockdown),
       };
       res.json(UpdateGuildSettingsResponse.parse(data));
     } finally {

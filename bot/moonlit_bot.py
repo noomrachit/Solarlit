@@ -34,6 +34,9 @@ intents.guilds = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
 
+# ป้องกัน Anti-raid: เก็บเวลาการเข้าร่วมล่าสุดของแต่ละกิลด์ไว้ในแรม (ไม่ต้องกิน DB ทุก join)
+_recent_joins: dict[int, list[datetime]] = {}
+
 # Helpers
 async def get_settings(guild_id: int) -> dict:
     pool = await db.get_pool()
@@ -151,9 +154,95 @@ async def on_ready():
     except Exception as e:
         log.error(f"Refresh dashboard boards failed: {e}")
 
+async def _antiraid_punish(member: discord.Member, action: str, reason: str):
+    """ลงโทษสมาชิกตามค่า antiraid_action ที่ตั้งไว้ (kick / ban / timeout)"""
+    try:
+        if action == "ban":
+            await member.ban(reason=reason, delete_message_days=0)
+        elif action == "timeout":
+            until = datetime.now(timezone.utc) + timedelta(hours=1)
+            await member.timeout(until, reason=reason)
+        else:
+            await member.kick(reason=reason)
+    except Exception:
+        pass
+
+
+async def _handle_antiraid(member: discord.Member, settings: dict) -> bool:
+    """
+    ตรวจสมาชิกที่เพิ่งเข้า ตาม antiraid settings ของกิลด์
+    คืนค่า True ถ้ามีการจัดการ (ลงโทษ/ถูกบล็อก) แล้ว ไม่ต้องทำ welcome message ต่อ
+    """
+    if not settings.get("antiraid_enabled"):
+        return False
+
+    guild = member.guild
+    action = settings.get("antiraid_action") or "kick"
+
+    # กิลด์กำลังอยู่ในสถานะ lockdown (ตั้งมือหรือเพิ่งตรวจพบ raid) -> บล็อกสมาชิกใหม่ทั้งหมด
+    if settings.get("antiraid_lockdown"):
+        await _antiraid_punish(member, action, "Anti-raid: เซิร์ฟเวอร์อยู่ในสถานะ lockdown")
+        await send_log(guild, discord.Embed(
+            title="🛡️ Anti-raid: บล็อกสมาชิกใหม่ (lockdown)",
+            description=f"{member.mention} (`{member.id}`) ถูก{_action_th(action)} เพราะเซิร์ฟเวอร์ปิดรับสมาชิกใหม่ชั่วคราว",
+            color=0xFF3B3B, timestamp=datetime.now(timezone.utc)
+        ))
+        return True
+
+    # ตรวจอายุบัญชี Discord ของสมาชิก
+    min_age_hours = settings.get("antiraid_min_account_age_hours") or 0
+    if min_age_hours > 0:
+        account_age = datetime.now(timezone.utc) - member.created_at
+        if account_age < timedelta(hours=min_age_hours):
+            await _antiraid_punish(member, action, f"Anti-raid: บัญชีอายุต่ำกว่า {min_age_hours} ชม.")
+            await send_log(guild, discord.Embed(
+                title="🛡️ Anti-raid: บัญชีใหม่เกินไป",
+                description=(f"{member.mention} (`{member.id}`) ถูก{_action_th(action)}\n"
+                              f"บัญชีสร้างเมื่อ {member.created_at.strftime('%Y-%m-%d %H:%M UTC')} "
+                              f"(อายุ < {min_age_hours} ชม.)"),
+                color=0xFF9F1C, timestamp=datetime.now(timezone.utc)
+            ))
+            return True
+
+    # ตรวจ join-burst: มีคนเข้าพร้อมกันจำนวนมากในช่วงเวลาสั้นๆ หรือไม่
+    threshold = settings.get("antiraid_join_threshold") or 5
+    window = settings.get("antiraid_join_window_seconds") or 10
+    now = datetime.now(timezone.utc)
+    joins = _recent_joins.setdefault(guild.id, [])
+    joins.append(now)
+    cutoff = now - timedelta(seconds=window)
+    joins[:] = [t for t in joins if t > cutoff]
+
+    if len(joins) >= threshold:
+        pool = await db.get_pool()
+        await pool.execute("""
+            INSERT INTO settings (guild_id, antiraid_lockdown) VALUES ($1, TRUE)
+            ON CONFLICT (guild_id) DO UPDATE SET antiraid_lockdown = TRUE
+        """, guild.id)
+        await send_log(guild, discord.Embed(
+            title="🚨 Anti-raid: ตรวจพบการเข้าพร้อมกันจำนวนมาก (RAID)",
+            description=(f"พบ {len(joins)} คนเข้าร่วมภายใน {window} วินาที "
+                          f"(เกินเกณฑ์ {threshold}) — เปิด **lockdown** อัตโนมัติแล้ว\n"
+                          f"ใช้ `/antiraid unlock` เมื่อแน่ใจว่าปลอดภัยแล้ว"),
+            color=0xFF0000, timestamp=datetime.now(timezone.utc)
+        ))
+        return False  # ตัวที่ทำให้ครบ threshold เองไม่ลงโทษย้อนหลัง แต่คนต่อไปจะถูก lockdown บล็อก
+
+    return False
+
+
+def _action_th(action: str) -> str:
+    return {"kick": "เตะ", "ban": "แบน", "timeout": "timeout"}.get(action, "เตะ")
+
+
 @bot.event
 async def on_member_join(member: discord.Member):
     settings = await get_settings(member.guild.id)
+
+    handled = await _handle_antiraid(member, settings)
+    if handled:
+        return
+
     channel_id = settings.get("welcome_channel")
     if not channel_id:
         return
@@ -526,6 +615,93 @@ async def automod_listwords(interaction: discord.Interaction):
     await interaction.response.send_message(f"**Banned words:**\n{words}", ephemeral=True)
 
 tree.add_command(automod_group)
+
+# ป้องกัน Anti-raid
+antiraid_group = app_commands.Group(name="antiraid", description="ระบบป้องกัน raid (บอทปลอม/สแปมเข้าเซิร์ฟเวอร์พร้อมกัน)")
+
+@antiraid_group.command(name="toggle", description="เปิด/ปิดระบบป้องกัน raid")
+@has_mod_perms()
+async def antiraid_toggle(interaction: discord.Interaction):
+    pool = await db.get_pool()
+    settings = await get_settings(interaction.guild.id)
+    new_val = not settings.get("antiraid_enabled", False)
+    await pool.execute("""
+        INSERT INTO settings (guild_id, antiraid_enabled) VALUES ($1, $2)
+        ON CONFLICT (guild_id) DO UPDATE SET antiraid_enabled = $2
+    """, interaction.guild.id, new_val)
+    await interaction.response.send_message(f"ระบบป้องกัน raid {'เปิด' if new_val else 'ปิด'} แล้ว", ephemeral=True)
+
+@antiraid_group.command(name="threshold", description="ตั้งจำนวนคนเข้าพร้อมกันที่ถือว่าเป็น raid")
+@has_mod_perms()
+@app_commands.describe(count="จำนวนคน", seconds="ภายในกี่วินาที")
+async def antiraid_threshold(interaction: discord.Interaction, count: app_commands.Range[int, 2, 50] = 5, seconds: app_commands.Range[int, 3, 120] = 10):
+    pool = await db.get_pool()
+    await pool.execute("""
+        INSERT INTO settings (guild_id, antiraid_join_threshold, antiraid_join_window_seconds) VALUES ($1, $2, $3)
+        ON CONFLICT (guild_id) DO UPDATE SET antiraid_join_threshold = $2, antiraid_join_window_seconds = $3
+    """, interaction.guild.id, count, seconds)
+    await interaction.response.send_message(f"ตั้งเกณฑ์ raid เป็น {count} คน ภายใน {seconds} วินาทีแล้ว", ephemeral=True)
+
+@antiraid_group.command(name="minage", description="ตั้งอายุบัญชี Discord ขั้นต่ำที่อนุญาตให้เข้าได้")
+@has_mod_perms()
+@app_commands.describe(hours="จำนวนชั่วโมง (0 = ไม่ตรวจอายุบัญชี)")
+async def antiraid_minage(interaction: discord.Interaction, hours: app_commands.Range[int, 0, 8760] = 24):
+    pool = await db.get_pool()
+    await pool.execute("""
+        INSERT INTO settings (guild_id, antiraid_min_account_age_hours) VALUES ($1, $2)
+        ON CONFLICT (guild_id) DO UPDATE SET antiraid_min_account_age_hours = $2
+    """, interaction.guild.id, hours)
+    await interaction.response.send_message(f"ตั้งอายุบัญชีขั้นต่ำเป็น {hours} ชม. แล้ว", ephemeral=True)
+
+@antiraid_group.command(name="action", description="ตั้งการกระทำต่อสมาชิกที่ถูกจับว่าเป็น raid")
+@has_mod_perms()
+@app_commands.choices(action=[
+    app_commands.Choice(name="เตะ (kick)", value="kick"),
+    app_commands.Choice(name="แบน (ban)", value="ban"),
+    app_commands.Choice(name="timeout 1 ชม.", value="timeout"),
+])
+async def antiraid_action(interaction: discord.Interaction, action: app_commands.Choice[str]):
+    pool = await db.get_pool()
+    await pool.execute("""
+        INSERT INTO settings (guild_id, antiraid_action) VALUES ($1, $2)
+        ON CONFLICT (guild_id) DO UPDATE SET antiraid_action = $2
+    """, interaction.guild.id, action.value)
+    await interaction.response.send_message(f"ตั้งการกระทำเป็น `{action.value}` แล้ว", ephemeral=True)
+
+@antiraid_group.command(name="status", description="ดูสถานะระบบป้องกัน raid ปัจจุบัน")
+@has_mod_perms()
+async def antiraid_status(interaction: discord.Interaction):
+    settings = await get_settings(interaction.guild.id)
+    embed = discord.Embed(title="🛡️ สถานะ Anti-raid", color=0x3ED8C3, timestamp=datetime.now(timezone.utc))
+    embed.add_field(name="เปิดใช้งาน", value="✅ เปิด" if settings.get("antiraid_enabled") else "❌ ปิด", inline=True)
+    embed.add_field(name="Lockdown", value="🔒 ล็อกอยู่" if settings.get("antiraid_lockdown") else "🔓 ปกติ", inline=True)
+    embed.add_field(name="การกระทำ", value=_action_th(settings.get("antiraid_action") or "kick"), inline=True)
+    embed.add_field(name="เกณฑ์ raid", value=f"{settings.get('antiraid_join_threshold') or 5} คน / {settings.get('antiraid_join_window_seconds') or 10} วินาที", inline=True)
+    embed.add_field(name="อายุบัญชีขั้นต่ำ", value=f"{settings.get('antiraid_min_account_age_hours') or 0} ชม.", inline=True)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@antiraid_group.command(name="lockdown", description="ปิดรับสมาชิกใหม่ทันที (บล็อกทุกคนที่เข้ามาจนกว่าจะ unlock)")
+@has_mod_perms()
+async def antiraid_lockdown(interaction: discord.Interaction):
+    pool = await db.get_pool()
+    await pool.execute("""
+        INSERT INTO settings (guild_id, antiraid_lockdown) VALUES ($1, TRUE)
+        ON CONFLICT (guild_id) DO UPDATE SET antiraid_lockdown = TRUE
+    """, interaction.guild.id)
+    await interaction.response.send_message("🔒 เปิด lockdown แล้ว — สมาชิกใหม่ทุกคนจะถูกบล็อกจนกว่าจะ `/antiraid unlock`", ephemeral=True)
+
+@antiraid_group.command(name="unlock", description="ยกเลิก lockdown กลับมารับสมาชิกใหม่ตามปกติ")
+@has_mod_perms()
+async def antiraid_unlock(interaction: discord.Interaction):
+    pool = await db.get_pool()
+    await pool.execute("""
+        INSERT INTO settings (guild_id, antiraid_lockdown) VALUES ($1, FALSE)
+        ON CONFLICT (guild_id) DO UPDATE SET antiraid_lockdown = FALSE
+    """, interaction.guild.id)
+    _recent_joins.pop(interaction.guild.id, None)
+    await interaction.response.send_message("🔓 ยกเลิก lockdown แล้ว", ephemeral=True)
+
+tree.add_command(antiraid_group)
 
 # Custom Commands
 cc_group = app_commands.Group(name="customcommand", description="จัดการ custom commands")

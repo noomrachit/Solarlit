@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ราคา — SOLARLIT OPS</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans+Thai:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0a0e13;
+    --panel:#121920;
+    --panel-2:#0e141a;
+    --line:#233039;
+    --line-soft:#1a232b;
+    --text:#e8edf2;
+    --text-dim:#8fa0ab;
+    --text-faint:#4f6068;
+    --amber:#ff9f1c;
+    --amber-dim:#c97e18;
+    --cyan:#3ed8c3;
+    --cyan-dim:#2a9c8d;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  html{scroll-behavior:smooth;}
+  body{
+    background:var(--bg);
+    color:var(--text);
+    font-family:'IBM Plex Sans Thai', sans-serif;
+    font-weight:400;
+    line-height:1.7;
+    -webkit-font-smoothing:antialiased;
+  }
+  .mono{font-family:'IBM Plex Mono', monospace;}
+  .wrap{max-width:1120px; margin:0 auto; padding:0 28px;}
+  a{color:inherit; text-decoration:none;}
+
+  nav{
+    position:sticky; top:0; z-index:50;
+    background:rgba(10,14,19,0.85);
+    backdrop-filter:blur(10px);
+    border-bottom:1px solid var(--line-soft);
+  }
+  nav .wrap{display:flex; align-items:center; justify-content:space-between; height:64px;}
+  .brand{display:flex; align-items:center; gap:10px; font-family:'IBM Plex Mono', monospace; font-weight:600; font-size:15px; letter-spacing:0.08em;}
+  .brand .dot{width:8px; height:8px; border-radius:50%; background:var(--cyan); box-shadow:0 0 8px var(--cyan);}
+  .nav-links{display:flex; gap:32px; font-size:14px; color:var(--text-dim);}
+  .nav-links a:hover{color:var(--amber);}
+  .nav-links a.active{color:var(--amber);}
+  @media (max-width:760px){ .nav-links{display:none;} }
+
+  header.hero{padding:90px 0 60px; border-bottom:1px solid var(--line-soft);}
+  .eyebrow{
+    font-family:'IBM Plex Mono', monospace; font-size:12.5px; letter-spacing:0.18em;
+    color:var(--cyan); display:flex; align-items:center; gap:10px; margin-bottom:24px;
+  }
+  .eyebrow::before{content:""; width:22px; height:1px; background:var(--cyan);}
+  h1{
+    font-family:'IBM Plex Mono', monospace; font-weight:600;
+    font-size:clamp(28px, 4.6vw, 46px); line-height:1.2; max-width:760px; margin-bottom:20px;
+  }
+  header.hero p.lede{font-size:16px; color:var(--text-dim); max-width:600px;}
+
+  .section{padding:70px 0; border-bottom:1px solid var(--line-soft);}
+  .section-head{margin-bottom:40px;}
+  .section-head h2{font-family:'IBM Plex Mono', monospace; font-size:clamp(20px,2.8vw,28px); font-weight:600; max-width:640px;}
+  .section-head p{color:var(--text-dim); max-width:600px; margin-top:12px; font-size:15px;}
+
+  .units{display:grid; grid-template-columns:repeat(2, 1fr); gap:20px; max-width:840px;}
+  @media (max-width:760px){ .units{grid-template-columns:1fr;} }
+  .unit{
+    background:var(--panel); border:1px solid var(--line); border-radius:6px;
+    padding:32px 28px; display:flex; flex-direction:column;
+  }
+  .unit.highlight{border-color:var(--amber-dim); box-shadow:0 0 30px rgba(255,159,28,0.08);}
+  .unit-id{
+    font-family:'IBM Plex Mono', monospace; font-size:11px; letter-spacing:0.1em;
+    color:var(--text-faint); margin-bottom:18px; display:flex; justify-content:space-between; align-items:center;
+  }
+  .status-pill{
+    display:inline-flex; align-items:center; gap:6px; font-size:10.5px; color:var(--cyan);
+    border:1px solid var(--cyan-dim); padding:3px 8px; border-radius:20px;
+  }
+  .status-pill .dot{width:5px; height:5px; border-radius:50%; background:var(--cyan); box-shadow:0 0 6px var(--cyan);}
+  .unit-name{font-family:'IBM Plex Mono', monospace; font-size:34px; font-weight:700; margin-bottom:4px;}
+  .unit-name small{font-size:14px; font-weight:400; color:var(--text-dim);}
+  .unit-role{color:var(--text-dim); font-size:14px; margin-bottom:26px;}
+  .unit-features{list-style:none; display:flex; flex-direction:column; gap:12px; margin-bottom:30px; flex-grow:1;}
+  .unit-features li{font-size:13.5px; color:var(--text-dim); display:flex; gap:10px; align-items:baseline;}
+  .unit-features li::before{content:"›"; color:var(--amber); font-family:'IBM Plex Mono', monospace; flex-shrink:0;}
+  .unit-features li b{color:var(--text); font-weight:600;}
+  .btn{
+    font-family:'IBM Plex Mono', monospace; font-size:13.5px; font-weight:600; letter-spacing:0.03em;
+    padding:13px 24px; border-radius:3px; display:inline-flex; align-items:center; justify-content:center;
+    gap:8px; transition:all 0.15s ease; cursor:pointer; border:1px solid transparent; width:100%;
+  }
+  .btn-primary{background:var(--amber); color:#1a1206;}
+  .btn-primary:hover{background:#ffb347;}
+  .btn-ghost{border-color:var(--line); color:var(--text);}
+  .btn-ghost:hover{border-color:var(--text-dim); background:var(--panel-2);}
+
+  .faq{max-width:760px; display:flex; flex-direction:column; gap:1px; background:var(--line-soft); border:1px solid var(--line-soft); border-radius:6px; overflow:hidden;}
+  .faq-item{background:var(--panel); padding:22px 24px;}
+  .faq-item .q{font-family:'IBM Plex Mono', monospace; font-size:14px; color:var(--amber); margin-bottom:8px; font-weight:600;}
+  .faq-item .a{color:var(--text-dim); font-size:14px;}
+
+  footer{padding:70px 0 50px;}
+  .cta-block{text-align:center; max-width:600px; margin:0 auto 50px;}
+  .cta-block h2{font-family:'IBM Plex Mono', monospace; font-size:clamp(22px,3.2vw,30px); margin-bottom:16px;}
+  .cta-block p{color:var(--text-dim); margin-bottom:32px;}
+  .hero-cta{display:flex; gap:14px; flex-wrap:wrap; justify-content:center;}
+  .hero-cta .btn{width:auto;}
+  .foot-bottom{
+    display:flex; justify-content:space-between; align-items:center; padding-top:32px;
+    border-top:1px solid var(--line-soft); font-size:12.5px; color:var(--text-faint);
+    font-family:'IBM Plex Mono', monospace; flex-wrap:wrap; gap:12px;
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <div class="brand"><span class="dot"></span>SOLARLIT&nbsp;OPS</div>
+    <div class="nav-links">
+      <a href="index.html#units">หน่วยบอท</a>
+      <a href="pricing.html" class="active">ราคา</a>
+      <a href="commands.html">คำสั่งทั้งหมด</a>
+      <a href="docs.html">วิธีใช้งาน</a>
+      <a href="invite.html">เชิญบอท</a>
+      <a href="/login">เริ่มทดลองใช้</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap">
+    <div class="eyebrow">PRICING // 30-DAY FREE TRIAL</div>
+    <h1>ราคาแบบเดียว เข้าใจง่าย ไม่มีค่าใช้จ่ายแอบแฝง</h1>
+    <p class="lede">ทุกแพ็กเกจได้ ใจปู (คิว/moderation) + ยาม (ติดตามห้องเสียง) ครบทุกฟีเจอร์เหมือนกัน ต่างกันแค่จำนวนบอท Voice Relay ที่ถ่ายทอดเสียงพร้อมกันได้</p>
+  </div>
+</header>
+
+<section class="section">
+  <div class="wrap">
+    <div class="units">
+      <div class="unit">
+        <div class="unit-id">STANDARD
+          <span class="status-pill"><span class="dot"></span>11 BOTS</span>
+        </div>
+        <div class="unit-name">฿120<small>/เดือน</small></div>
+        <div class="unit-role">เหมาะกับกิจกรรมกลุ่มขนาดกลาง</div>
+        <ul class="unit-features">
+          <li><b>ใจปู</b> — คิว, Breakout Rooms, Moderation ครบ</li>
+          <li><b>ยาม</b> — ติดตามห้องเสียง, สถิติ, CSV export ครบ</li>
+          <li>Voice Relay: บอทฟัง 1 + บอทพูด 10 (รวม 11 ตัว)</li>
+          <li>ถ่ายทอดเสียงได้สูงสุด 10 ห้องย่อยพร้อมกัน</li>
+        </ul>
+        <a href="/login" class="btn btn-ghost">เริ่มทดลองใช้ฟรี</a>
+      </div>
+
+      <div class="unit highlight">
+        <div class="unit-id">PRO
+          <span class="status-pill"><span class="dot"></span>17 BOTS</span>
+        </div>
+        <div class="unit-name">฿250<small>/เดือน</small></div>
+        <div class="unit-role">เหมาะกับอีเวนต์/กิจกรรมขนาดใหญ่</div>
+        <ul class="unit-features">
+          <li><b>ใจปู</b> — คิว, Breakout Rooms, Moderation ครบ</li>
+          <li><b>ยาม</b> — ติดตามห้องเสียง, สถิติ, CSV export ครบ</li>
+          <li>Voice Relay: บอทฟัง 2 + บอทพูด 15 (รวม 17 ตัว)</li>
+          <li>ถ่ายทอดเสียงได้สูงสุด 15 ห้องย่อยพร้อมกัน</li>
+        </ul>
+        <a href="/login" class="btn btn-primary">เริ่มทดลองใช้ฟรี</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="eyebrow">FAQ</div>
+      <h2>คำถามที่พบบ่อยเรื่องราคา</h2>
+    </div>
+    <div class="faq">
+      <div class="faq-item">
+        <div class="q">ทดลองใช้ฟรี 30 วัน ต้องผูกบัตรไหม</div>
+        <div class="a">ไม่ต้อง — ใช้งานได้เต็มสิทธิ์ระดับ PRO ฟรี 30 วันตั้งแต่เชิญบอทเข้าเซิร์ฟเวอร์ ไม่ต้องกรอกข้อมูลบัตรจนกว่าจะตัดสินใจสมัครแพ็กเกจจริง</div>
+      </div>
+      <div class="faq-item">
+        <div class="q">เปลี่ยนแพ็กเกจภายหลังได้ไหม</div>
+        <div class="a">ได้ อัปเกรด/ดาวน์เกรดได้ทุกเมื่อผ่านหน้า dashboard หลัง login — มีผลทันทีในรอบบิลถัดไป</div>
+      </div>
+      <div class="faq-item">
+        <div class="q">จำนวนบอท Voice Relay นับยังไง</div>
+        <div class="a">นับรวมบอทฟัง ("หัวหน้า" — รับเสียงจากห้องบัญชาการ) และบอทพูด ("ลูกน้อง" — กระจายเสียงเข้าห้องย่อย) ทุกตัวที่ใช้งานพร้อมกัน</div>
+      </div>
+      <div class="faq-item">
+        <div class="q">ชำระเงินยังไง</div>
+        <div class="a">ชำระผ่านบัตรเครดิต/เดบิตในหน้า dashboard ประมวลผลโดย Omise ตัดรอบรายเดือนอัตโนมัติ</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="cta-block">
+      <h2>พร้อมติดตั้งหน่วยบอทให้เซิร์ฟเวอร์แล้วหรือยัง</h2>
+      <p>ทดลองใช้ฟรี 30 วัน ครบทุกระบบ ไม่ต้องผูกบัตรจนกว่าจะมั่นใจ</p>
+      <div class="hero-cta">
+        <a href="/login" class="btn btn-primary">เริ่มทดลองใช้ฟรี 30 วัน →</a>
+        <a href="invite.html" class="btn btn-ghost">ดูลิงก์เชิญบอท</a>
+      </div>
+    </div>
+    <div class="foot-bottom">
+      <div>SOLARLIT OPS © 2026</div>
+      <div style="display:flex; gap:20px;">
+        <a href="terms.html" style="color:var(--text-faint);">ข้อกำหนดการใช้งาน</a>
+        <a href="privacy.html" style="color:var(--text-faint);">นโยบายความเป็นส่วนตัว</a>
+      </div>
+      <div>BUILT FOR DISCORD COMMUNITIES</div>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>

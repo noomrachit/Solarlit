@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>คำสั่งทั้งหมด — SOLARLIT OPS</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans+Thai:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0a0e13; --panel:#121920; --panel-2:#0e141a;
+    --line:#233039; --line-soft:#1a232b;
+    --text:#e8edf2; --text-dim:#8fa0ab; --text-faint:#4f6068;
+    --amber:#ff9f1c; --amber-dim:#c97e18;
+    --cyan:#3ed8c3; --cyan-dim:#2a9c8d;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{
+    background:var(--bg); color:var(--text);
+    font-family:'IBM Plex Sans Thai', sans-serif; font-weight:400; line-height:1.7;
+    -webkit-font-smoothing:antialiased;
+  }
+  .mono{font-family:'IBM Plex Mono', monospace;}
+  .wrap{max-width:1120px; margin:0 auto; padding:0 28px;}
+  a{color:inherit; text-decoration:none;}
+
+  nav{
+    position:sticky; top:0; z-index:50; background:rgba(10,14,19,0.85);
+    backdrop-filter:blur(10px); border-bottom:1px solid var(--line-soft);
+  }
+  nav .wrap{display:flex; align-items:center; justify-content:space-between; height:64px;}
+  .brand{display:flex; align-items:center; gap:10px; font-family:'IBM Plex Mono', monospace; font-weight:600; font-size:15px; letter-spacing:0.08em;}
+  .brand .dot{width:8px; height:8px; border-radius:50%; background:var(--cyan); box-shadow:0 0 8px var(--cyan);}
+  .nav-links{display:flex; gap:32px; font-size:14px; color:var(--text-dim);}
+  .nav-links a:hover{color:var(--amber);}
+  .nav-links a.active{color:var(--amber);}
+  @media (max-width:760px){ .nav-links{display:none;} }
+
+  header.hero{padding:90px 0 50px; border-bottom:1px solid var(--line-soft);}
+  .eyebrow{
+    font-family:'IBM Plex Mono', monospace; font-size:12.5px; letter-spacing:0.18em;
+    color:var(--cyan); display:flex; align-items:center; gap:10px; margin-bottom:24px;
+  }
+  .eyebrow::before{content:""; width:22px; height:1px; background:var(--cyan);}
+  h1{font-family:'IBM Plex Mono', monospace; font-weight:600; font-size:clamp(28px, 4.6vw, 46px); line-height:1.2; max-width:760px; margin-bottom:20px;}
+  header.hero p.lede{font-size:16px; color:var(--text-dim); max-width:640px; margin-bottom:28px;}
+
+  .jump{display:flex; gap:10px; flex-wrap:wrap;}
+  .jump a{
+    font-family:'IBM Plex Mono', monospace; font-size:12px; letter-spacing:0.04em;
+    border:1px solid var(--line); padding:8px 14px; border-radius:20px; color:var(--text-dim);
+  }
+  .jump a:hover{border-color:var(--amber-dim); color:var(--amber);}
+
+  .section{padding:60px 0; border-bottom:1px solid var(--line-soft);}
+  .bot-head{display:flex; align-items:baseline; gap:14px; margin-bottom:8px; flex-wrap:wrap;}
+  .bot-head h2{font-family:'IBM Plex Mono', monospace; font-size:clamp(22px,3vw,30px); font-weight:700; color:var(--amber);}
+  .bot-head .tag{
+    font-family:'IBM Plex Mono', monospace; font-size:11px; color:var(--text-faint);
+    letter-spacing:0.1em; border:1px solid var(--line); padding:3px 10px; border-radius:20px;
+  }
+  .bot-desc{color:var(--text-dim); font-size:14.5px; max-width:680px; margin-bottom:36px;}
+
+  .group{margin-bottom:34px;}
+  .group-name{
+    font-family:'IBM Plex Mono', monospace; font-size:14px; color:var(--cyan);
+    margin-bottom:12px; display:flex; align-items:center; gap:10px;
+  }
+  .group-name::before{content:""; width:16px; height:1px; background:var(--cyan-dim);}
+
+  table{width:100%; border-collapse:collapse; background:var(--panel); border:1px solid var(--line); border-radius:6px; overflow:hidden;}
+  table + table{margin-top:0;}
+  thead th{
+    text-align:left; font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:0.08em;
+    color:var(--text-faint); padding:10px 16px; background:var(--panel-2); border-bottom:1px solid var(--line);
+  }
+  tbody td{padding:12px 16px; border-bottom:1px solid var(--line-soft); font-size:13.5px; color:var(--text-dim); vertical-align:top;}
+  tbody tr:last-child td{border-bottom:none;}
+  td.cmd{font-family:'IBM Plex Mono', monospace; color:var(--amber); font-size:13px; white-space:nowrap;}
+  td.perm{white-space:nowrap; width:1%;}
+  .perm-badge{
+    font-family:'IBM Plex Mono', monospace; font-size:10.5px; padding:3px 9px; border-radius:20px;
+    display:inline-block;
+  }
+  .perm-badge.admin{color:#ff9f9f; border:1px solid #6b2d2d; background:rgba(255,80,80,0.06);}
+  .perm-badge.all{color:var(--cyan); border:1px solid var(--cyan-dim); background:rgba(62,216,195,0.06);}
+
+  @media (max-width:640px){
+    table, thead, tbody, th, td, tr{display:block;}
+    thead{display:none;}
+    tbody tr{border-bottom:1px solid var(--line); padding:12px 16px;}
+    tbody td{border:none; padding:3px 0;}
+    td.cmd{font-size:14px;}
+  }
+
+  footer{padding:60px 0 50px;}
+  .foot-bottom{
+    display:flex; justify-content:space-between; align-items:center; padding-top:32px;
+    border-top:1px solid var(--line-soft); font-size:12.5px; color:var(--text-faint);
+    font-family:'IBM Plex Mono', monospace; flex-wrap:wrap; gap:12px;
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <div class="brand"><span class="dot"></span>SOLARLIT&nbsp;OPS</div>
+    <div class="nav-links">
+      <a href="index.html#units">หน่วยบอท</a>
+      <a href="pricing.html">ราคา</a>
+      <a href="commands.html" class="active">คำสั่งทั้งหมด</a>
+      <a href="docs.html">วิธีใช้งาน</a>
+      <a href="invite.html">เชิญบอท</a>
+      <a href="/login">เริ่มทดลองใช้</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap">
+    <div class="eyebrow">COMMAND REFERENCE // ALL UNITS</div>
+    <h1>คำสั่งทั้งหมดของทั้ง 3 หน่วยบอท</h1>
+    <p class="lede">รวมคำสั่งทุกตัว (90 คำสั่ง) ของ ใจปู, ยาม และ Voice Relay — "แอดมิน" หมายถึงต้องมีสิทธิ์ Manage Server/Roles ขึ้นไป "ทุกคน" ใช้ได้เลยไม่ต้องมีสิทธิ์พิเศษ</p>
+    <div class="jump">
+      <a href="#jaipu">ใจปู (55)</a>
+      <a href="#yarm">ยาม (28)</a>
+      <a href="#relay">Voice Relay (8)</a>
+    </div>
+  </div>
+</header>
+
+<section class="section" id="jaipu">
+  <div class="wrap">
+    <div class="bot-head"><h2>ใจปู</h2><span class="tag">UNIT-01 · QUEUE / MOD</span></div>
+    <p class="bot-desc">ระบบคิว, breakout rooms, moderation, automod, welcome, custom commands, reaction roles และตั้งค่าบอท</p>
+
+    <div class="group">
+      <div class="group-name">/queue — ระบบคิว</div>
+      <table>
+        <thead><tr><th>คำสั่ง</th><th>คำอธิบาย</th><th>สิทธิ์</th></tr></thead>
+        <tbody>
+          <tr><td class="cmd">/queue join</td><td>เข้าคิว</td><td class="perm"><span class="perm-badge all">ทุกคน</span></td></tr>
+          <tr><td class="cmd">/queue leave</td><td>ออกจากคิว</td><td class="perm"><span class="perm-badge all">ทุกคน</span></td></tr>
+          <tr><td class="cmd">/queue list</td><td>ดูรายการคิว</td><td class="perm"><span class="perm-badge all">ทุกคน</span></td></tr>
+          <tr><td class="cmd">/queue book</td><td>จองคิวล่วงหน้า (ระบุวันและเวลาไทย)</td><td class="perm"><span class="perm-badge all">ทุกคน</span></td></tr>
+          <tr><td class="cmd">/queue unbook</td><td>ยกเลิกการจองคิวล่วงหน้าของตัวเอง</td><td class="perm"><span class="perm-badge all">ทุกคน</span></td></tr>
+          <tr><td class="cmd">/queue bookings</td><td>ดูรายการจองคิวล่วงหน้าที่รอดำเนินการ</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/queue call</td><td>เรียกคิว (ไม่ระบุ user = เรียกคิวถัดไป / ระบุ user = เรียกจากกระดานคิวที่ถูกข้าม)</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/queue skipped</td><td>ดูรายชื่อคนที่ถูกข้ามคิว</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/queue requeue</td><td>นำคนที่ถูกข้ามกลับเข้าคิวหลัก (ต่อท้ายคิว)</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/queue clear</td><td>ล้างคิวทั้งหมด (ไม่ลบกระดาน)</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/queue refresh</td><td>รีเฟรชกระดานคิวทั้งหมดในเซิร์ฟเวอร์นี้</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/queue board</td><td>โพสต์กระดานคิวสด (ปุ่มเข้า/ออก/เรียก/จบ/รีเฟรชในที่เดียว)</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="group">
+      <div class="group-name">/breakout — แยกห้องเสียงเป็นห้องย่อย</div>
+      <table>
+        <thead><tr><th>คำสั่ง</th><th>คำอธิบาย</th><th>สิทธิ์</th></tr></thead>
+        <tbody>
+          <tr><td class="cmd">/breakout start</td><td>แยกคนในห้องเสียงออกเป็นห้องย่อยหลายห้องอัตโนมัติ</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/breakout recall</td><td>ดึงทุกคนกลับห้องหลัก และลบห้องย่อยทิ้ง</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/breakout move</td><td>ย้ายสมาชิกคนใดคนหนึ่งไปห้องย่อยที่ระบุ</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/breakout setowner</td><td>กำหนดหัวหน้าห้องย่อย (ได้สิทธิ์พูดกลับห้องใหญ่ตอน recall)</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/breakout setspeakers</td><td>ตั้งค่าห้อง: เฉพาะบทบาทที่ระบุพูดได้ คนอื่นฟังอย่างเดียว</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/breakout unsetspeakers</td><td>ยกเลิกการจำกัดสิทธิ์พูด คืนค่า @everyone ปกติ</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="group">
+      <div class="group-name">/mod, /automod, /welcome — Moderation</div>
+      <table>
+        <thead><tr><th>คำสั่ง</th><th>คำอธิบาย</th><th>สิทธิ์</th></tr></thead>
+        <tbody>
+          <tr><td class="cmd">/mod kick</td><td>เตะสมาชิกออกจากเซิร์ฟเวอร์</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/mod ban</td><td>แบนสมาชิก</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/mod timeout</td><td>Timeout สมาชิก</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/mod warn</td><td>เตือนสมาชิก</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/mod warnings</td><td>ดูประวัติการเตือน</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/mod clear</td><td>ลบข้อความจำนวนมาก</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/welcome channel</td><td>ตั้งช่อง welcome</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/welcome message</td><td>ตั้งข้อความต้อนรับ</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/welcome leave</td><td>ตั้งข้อความเมื่อสมาชิกออก</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/automod toggle</td><td>เปิด/ปิด automod</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/automod anti_invite</td><td>เปิด/ปิด ห้ามโพสต์ Discord invite</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/automod anti_mention_spam</td><td>เปิด/ปิด ป้องกัน mention spam</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/automod addword</td><td>เพิ่มคำต้องห้าม</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/automod removeword</td><td>ลบคำต้องห้าม</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/automod listwords</td><td>ดูรายการคำต้องห้าม</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="group">
+      <div class="group-name">/customcommand, /reactionrole</div>
+      <table>
+        <thead><tr><th>คำสั่ง</th><th>คำอธิบาย</th><th>สิทธิ์</th></tr></thead>
+        <tbody>
+          <tr><td class="cmd">/customcommand add</td><td>เพิ่ม custom command</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/customcommand remove</td><td>ลบ custom command</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/customcommand list</td><td>ดูรายการ custom commands</td><td class="perm"><span class="perm-badge all">ทุกคน</span></td></tr>
+          <tr><td class="cmd">/customcommand prefix</td><td>เปลี่ยน prefix ของ custom commands</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/reactionrole add</td><td>เพิ่ม reaction role บนข้อความที่มีอยู่</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/reactionrole remove</td><td>ลบ reaction role</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="group">
+      <div class="group-name">/supportpanel, /settings, /voice, /stage</div>
+      <table>
+        <thead><tr><th>คำสั่ง</th><th>คำอธิบาย</th><th>สิทธิ์</th></tr></thead>
+        <tbody>
+          <tr><td class="cmd">/supportpanel panel</td><td>โพสต์แผง support</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/settings logchannel</td><td>ตั้งช่อง log สำหรับ moderation</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/settings supportrole</td><td>ตั้ง role ที่จะถูกปิงเมื่อมีคนกดปุ่มใน Support Panel</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/settings dashboardchannel</td><td>ตั้งช่องปักหมุดกระดานรวมคำสั่งบอททุกตัว</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/voice create</td><td>สร้าง Voice Channel</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/voice delete</td><td>ลบ Voice Channel</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/voice limit</td><td>ตั้งจำนวนคนสูงสุดใน Voice Channel</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/voice rename</td><td>เปลี่ยนชื่อ Voice Channel</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/stage create</td><td>สร้าง Stage Channel (ห้องกระจายเสียง)</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/stage delete</td><td>ลบ Stage Channel</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/stage topic</td><td>ตั้งหัวข้อเวทีของ Stage Channel</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/stage rename</td><td>เปลี่ยนชื่อ Stage Channel</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="group">
+      <div class="group-name">ทั่วไป</div>
+      <table>
+        <thead><tr><th>คำสั่ง</th><th>คำอธิบาย</th><th>สิทธิ์</th></tr></thead>
+        <tbody>
+          <tr><td class="cmd">/invite</td><td>รับลิงก์เชิญบอทเข้าเซิร์ฟเวอร์ (พร้อม permission ครบ)</td><td class="perm"><span class="perm-badge all">ทุกคน</span></td></tr>
+          <tr><td class="cmd">/ping</td><td>ตรวจสอบสถานะและความหน่วงของบอท</td><td class="perm"><span class="perm-badge all">ทุกคน</span></td></tr>
+          <tr><td class="cmd">/help</td><td>ดูคำสั่งทั้งหมด</td><td class="perm"><span class="perm-badge all">ทุกคน</span></td></tr>
+          <tr><td class="cmd">/dashboard</td><td>แสดงกระดานรวมบอททั้งหมดในเซิร์ฟเวอร์ พร้อมรูปและคำสั่งของแต่ละตัว</td><td class="perm"><span class="perm-badge all">ทุกคน</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="yarm">
+  <div class="wrap">
+    <div class="bot-head"><h2>ยาม</h2><span class="tag">UNIT-02 · SURVEILLANCE</span></div>
+    <p class="bot-desc">ติดตามกิจกรรมห้องเสียง สถิติ+กราฟ ส่งออก CSV และระบบแนะนำตัวสมาชิก/จัดปาร์ตี้</p>
+
+    <div class="group">
+      <div class="group-name">/track, /voice — ติดตามและสถิติห้องเสียง</div>
+      <table>
+        <thead><tr><th>คำสั่ง</th><th>คำอธิบาย</th><th>สิทธิ์</th></tr></thead>
+        <tbody>
+          <tr><td class="cmd">/track add</td><td>เริ่มติดตามห้องเสียง</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/track remove</td><td>เลิกติดตามห้องเสียง</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/track list</td><td>ดูรายการห้องเสียงที่ติดตามอยู่</td><td class="perm"><span class="perm-badge all">ทุกคน</span></td></tr>
+          <tr><td class="cmd">/voice now</td><td>ดูว่าใครอยู่ในห้องตอนนี้ และอยู่มานานเท่าไหร่</td><td class="perm"><span class="perm-badge all">ทุกคน</span></td></tr>
+          <tr><td class="cmd">/voice stats</td><td>สรุปเวลารวมของแต่ละคนในห้อง (สูงสุด 200 คน)</td><td class="perm"><span class="perm-badge all">ทุกคน</span></td></tr>
+          <tr><td class="cmd">/voice export</td><td>ส่งออกข้อมูลเข้าห้องเป็น CSV (เปิดด้วย Excel ได้)</td><td class="perm"><span class="perm-badge all">ทุกคน</span></td></tr>
+          <tr><td class="cmd">/voice graph</td><td>ดูกราฟกิจกรรม (เวลารวมต่อวัน)</td><td class="perm"><span class="perm-badge all">ทุกคน</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="group">
+      <div class="group-name">ระบบแนะนำตัวสมาชิก</div>
+      <table>
+        <thead><tr><th>คำสั่ง</th><th>คำอธิบาย</th><th>สิทธิ์</th></tr></thead>
+        <tbody>
+          <tr><td class="cmd">/setup-jobs</td><td>ตั้งค่า Role อาชีพที่จะให้สมาชิกเลือกตอนแนะนำตัว</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/setup-introduction</td><td>ตั้งค่ากระดานแนะนำตัวผู้เล่นในห้องที่เลือก</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/setup-playerboard</td><td>ตั้งค่ากระดานรายชื่อสมาชิกแบบรูปภาพในห้องที่เลือก</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/my-profile</td><td>ดูข้อมูลแนะนำตัวของตัวเอง</td><td class="perm"><span class="perm-badge all">ทุกคน</span></td></tr>
+          <tr><td class="cmd">/edit-profile</td><td>แก้ไขข้อมูลแนะนำตัวของตัวเอง</td><td class="perm"><span class="perm-badge all">ทุกคน</span></td></tr>
+          <tr><td class="cmd">/player-search</td><td>ค้นหาผู้เล่นจากชื่อในเกมหรือชื่อในดิส</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/player-list</td><td>ดูตารางรายชื่อผู้เล่นที่แนะนำตัวไว้ทั้งหมด</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/player-remove</td><td>ลบข้อมูลแนะนำตัวของสมาชิก</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/remind-introduction</td><td>แจ้งเตือน (แท็ก) สมาชิกที่ยังไม่ได้แนะนำตัว</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/remind-introduction-dm</td><td>ส่ง DM แจ้งเตือนหาคนที่ยังไม่ได้แนะนำตัว</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/reset-introductions</td><td>ล้างรายชื่อแนะนำตัวทั้งหมด + ถอด Role อาชีพคืนทุกคน</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/restore-introductions</td><td>กู้ข้อมูลแนะนำตัวคืนจาก Embed เก่าในห้องบันทึก</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="group">
+      <div class="group-name">/party — ระบบจัดปาร์ตี้</div>
+      <table>
+        <thead><tr><th>คำสั่ง</th><th>คำอธิบาย</th><th>สิทธิ์</th></tr></thead>
+        <tbody>
+          <tr><td class="cmd">/party generate</td><td>สร้างโพยปาร์ตี้อัตโนมัติจากรายชื่อผู้เล่น (ไม่มีรูปตาราง)</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/party upload</td><td>แนบรูปตารางปาร์ตี้ (SUN/MOON/DARK/FLASH) ให้บอทจัดโพยตามรูป</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/party leaveboard</td><td>โพสต์กระดานลา (ปุ่มลา/ยกเลิกลา)</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/party rosterboard</td><td>โพสต์กระดานตารางปาร์ตี้ (รูปภาพ)</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/party cancel</td><td>ยกเลิกระบบจัดปาร์ตี้ทั้งหมด (ล้างโพย + ปิดกระดาน)</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="group">
+      <div class="group-name">ทั่วไป</div>
+      <table>
+        <thead><tr><th>คำสั่ง</th><th>คำอธิบาย</th><th>สิทธิ์</th></tr></thead>
+        <tbody>
+          <tr><td class="cmd">/invite</td><td>รับลิงก์เชิญบอทเข้าเซิร์ฟเวอร์ (รวม Manage Roles)</td><td class="perm"><span class="perm-badge all">ทุกคน</span></td></tr>
+          <tr><td class="cmd">/ping</td><td>ตรวจสอบสถานะบอท</td><td class="perm"><span class="perm-badge all">ทุกคน</span></td></tr>
+          <tr><td class="cmd">/help</td><td>ดูคำสั่งทั้งหมด</td><td class="perm"><span class="perm-badge all">ทุกคน</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="relay" style="border-bottom:none;">
+  <div class="wrap">
+    <div class="bot-head"><h2>Voice Relay</h2><span class="tag">UNIT-03 · LIVE RELAY</span></div>
+    <p class="bot-desc">ควบคุมผ่านคำสั่งของบอท "หัวหน้า" เท่านั้น (บอท "ลูกน้อง" ไม่มีคำสั่งของตัวเอง) — ทุกคำสั่งขึ้นต้นด้วย /relay</p>
+
+    <div class="group">
+      <div class="group-name">/relay</div>
+      <table>
+        <thead><tr><th>คำสั่ง</th><th>คำอธิบาย</th><th>สิทธิ์</th></tr></thead>
+        <tbody>
+          <tr><td class="cmd">/relay start</td><td>เริ่มฟังเสียงจากห้องหลัก (ยังไม่กระจายจนกว่าจะ addtarget)</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/relay addtarget</td><td>เพิ่มห้องย่อยที่จะกระจายเสียงไป (ใช้บอทพูดตัวถัดไปที่ว่าง)</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/relay removetarget</td><td>เลิกกระจายเสียงไปห้องที่ระบุ</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/relay stop</td><td>หยุดถ่ายทอดเสียงทั้งหมด (ทุกห้องของหัวหน้าตัวนี้)</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/relay clearrole</td><td>ยกเลิกการกรองบทบาท กลับไปกระจายเสียงทุกคนในห้องหลัก</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/relay bindlistener</td><td>ผูกบอทฟังให้เข้า/ออกห้องหลักอัตโนมัติตามความเคลื่อนไหว</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/relay bindspeaker(s)</td><td>ผูกบอทพูดตัวที่ระบุ (หรือหลายตัวพร้อมกันสูงสุด 5) ให้เข้า/ออกห้องย่อยอัตโนมัติ</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/relay unbind</td><td>ยกเลิกการผูกอัตโนมัติทั้งหมดของหัวหน้าตัวนี้</td><td class="perm"><span class="perm-badge admin">แอดมิน</span></td></tr>
+          <tr><td class="cmd">/relay status</td><td>เช็คสถานะการถ่ายทอดเสียงของหัวหน้าตัวนี้ตอนนี้</td><td class="perm"><span class="perm-badge all">ทุกคน</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-bottom">
+      <div>SOLARLIT OPS © 2026</div>
+      <div><a href="docs.html">วิธีใช้งานแบบละเอียด + ตัวอย่าง →</a></div>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>
