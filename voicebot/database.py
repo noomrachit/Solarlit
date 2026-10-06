@@ -115,6 +115,7 @@ async def init_db():
                 discord_user_id BIGINT NOT NULL,
                 group_name TEXT NOT NULL,
                 party_num INTEGER NOT NULL,
+                slot INTEGER,
                 character_class TEXT NOT NULL,
                 in_game_name TEXT NOT NULL,
                 PRIMARY KEY (guild_id, discord_user_id)
@@ -124,6 +125,16 @@ async def init_db():
                 guild_id BIGINT NOT NULL,
                 discord_user_id BIGINT NOT NULL,
                 left_at TIMESTAMPTZ DEFAULT NOW(),
+                orig_group TEXT,
+                orig_party INTEGER,
+                orig_slot INTEGER,
+                orig_class TEXT,
+                orig_name TEXT,
+                sub_user_id BIGINT,
+                sub_group TEXT,
+                sub_party INTEGER,
+                sub_slot INTEGER,
+                sub_name TEXT,
                 PRIMARY KEY (guild_id, discord_user_id)
             );
 
@@ -138,6 +149,13 @@ async def init_db():
                 channel_id BIGINT NOT NULL,
                 message_id BIGINT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS party_name_links (
+                guild_id BIGINT NOT NULL,
+                discord_user_id BIGINT NOT NULL,
+                in_game_name TEXT NOT NULL,
+                PRIMARY KEY (guild_id, discord_user_id)
+            );
             """
         )
 
@@ -146,5 +164,24 @@ async def init_db():
         await conn.execute(
             """
             ALTER TABLE intro_settings ADD COLUMN IF NOT EXISTS log_channel BIGINT;
+            """
+        )
+
+        # Migration: ระบบปาร์ตี้เวอร์ชันใหม่ (ตารางหลักจากรูป + กระดานลาแบบเรียลไทม์) เพิ่มคอลัมน์ slot ให้
+        # party_assignments และคอลัมน์บันทึกช่องเดิม/ตัวแทนให้ party_leave — เผื่อสองตารางนี้ถูกสร้างไปแล้ว
+        # ก่อนมีคอลัมน์พวกนี้ (CREATE TABLE IF NOT EXISTS จะไม่แก้ตารางที่มีอยู่แล้ว จึงต้อง ALTER แยก)
+        await conn.execute(
+            """
+            ALTER TABLE party_assignments ADD COLUMN IF NOT EXISTS slot INTEGER;
+            ALTER TABLE party_leave ADD COLUMN IF NOT EXISTS orig_group TEXT;
+            ALTER TABLE party_leave ADD COLUMN IF NOT EXISTS orig_party INTEGER;
+            ALTER TABLE party_leave ADD COLUMN IF NOT EXISTS orig_slot INTEGER;
+            ALTER TABLE party_leave ADD COLUMN IF NOT EXISTS orig_class TEXT;
+            ALTER TABLE party_leave ADD COLUMN IF NOT EXISTS orig_name TEXT;
+            ALTER TABLE party_leave ADD COLUMN IF NOT EXISTS sub_user_id BIGINT;
+            ALTER TABLE party_leave ADD COLUMN IF NOT EXISTS sub_group TEXT;
+            ALTER TABLE party_leave ADD COLUMN IF NOT EXISTS sub_party INTEGER;
+            ALTER TABLE party_leave ADD COLUMN IF NOT EXISTS sub_slot INTEGER;
+            ALTER TABLE party_leave ADD COLUMN IF NOT EXISTS sub_name TEXT;
             """
         )
