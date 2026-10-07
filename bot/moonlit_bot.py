@@ -942,13 +942,13 @@ async def before_check_bookings():
     await bot.wait_until_ready()
 
 
-# timer dict: guild_id → asyncio.Task (5 นาที auto-skip หลังกด "เรียก")
+# timer dict: guild_id → asyncio.Task (1 นาที auto-skip หลังกด "เรียก")
 _call_timers: dict[int, asyncio.Task] = {}
 
 
 async def _auto_skip_after_timeout(guild: discord.Guild, called_user_id: int, channel_id: int):
-    """รอ 5 นาที ถ้ายังไม่กด 'จบ' ให้ข้ามอัตโนมัติ"""
-    await asyncio.sleep(300)  # 5 นาที
+    """รอ 1 นาที ถ้ายังไม่กด 'จบ' ให้ข้ามอัตโนมัติ"""
+    await asyncio.sleep(60)  # 1 นาที
     try:
         pool = await db.get_pool()
         # ตรวจว่าคนนี้ยังอยู่หัวคิวและ called=TRUE อยู่ไหม
@@ -996,13 +996,13 @@ async def _auto_skip_after_timeout(guild: discord.Guild, called_user_id: int, ch
                 next_mention = f"<@{next_row['user_id']}>"
                 embed = discord.Embed(
                     title="⏰ หมดเวลา — ข้ามอัตโนมัติ",
-                    description=f"ข้าม {skipped_mention} (ไม่ตอบสนองภายใน 5 นาที)\n📢 ถึงคิวแล้ว: {next_mention} กรุณาเข้ามาได้เลย",
+                    description=f"ข้าม {skipped_mention} (ไม่ตอบสนองภายใน 1 นาที)\n📢 ถึงคิวแล้ว: {next_mention} กรุณาเข้ามาได้เลย",
                     color=discord.Color.orange()
                 )
             else:
                 embed = discord.Embed(
                     title="⏰ หมดเวลา — ข้ามอัตโนมัติ",
-                    description=f"ข้าม {skipped_mention} (ไม่ตอบสนองภายใน 5 นาที)\nไม่มีคนในคิวต่อแล้ว",
+                    description=f"ข้าม {skipped_mention} (ไม่ตอบสนองภายใน 1 นาที)\nไม่มีคนในคิวต่อแล้ว",
                     color=discord.Color.orange()
                 )
             await channel.send(embed=embed)
@@ -1111,7 +1111,7 @@ class QueueFullBoardView(discord.ui.View):
 
         announce = discord.Embed(
             title="📢 ถึงคิวแล้ว!",
-            description=f"{member.mention if member else f'<@{called_id}>'} กรุณาเข้ามาได้เลย\n⏰ มีเวลา 5 นาที",
+            description=f"{member.mention if member else f'<@{called_id}>'} กรุณาเข้ามาได้เลย\n⏰ มีเวลา 1 นาที",
             color=discord.Color.green()
         )
         await interaction.response.send_message(embed=announce)
@@ -1133,7 +1133,7 @@ class QueueFullBoardView(discord.ui.View):
 
         finished_id = row["user_id"]
 
-        # ยกเลิก timer 5 นาที
+        # ยกเลิก timer 1 นาที
         task = _call_timers.pop(interaction.guild.id, None)
         if task and not task.done():
             task.cancel()
@@ -1221,7 +1221,7 @@ class QueueFullBoardView(discord.ui.View):
             next_mention = f"<@{next_row['user_id']}>"
             announce = discord.Embed(
                 title="⏭️ ข้ามคิวแล้ว — เรียกคิวถัดไปอัตโนมัติ",
-                description=f"ข้าม {skipped_mention}\n📢 ถึงคิวแล้ว: {next_mention} กรุณาเข้ามาได้เลย\n⏰ มีเวลา 5 นาที",
+                description=f"ข้าม {skipped_mention}\n📢 ถึงคิวแล้ว: {next_mention} กรุณาเข้ามาได้เลย\n⏰ มีเวลา 1 นาที",
                 color=discord.Color.green()
             )
         else:
@@ -1260,7 +1260,23 @@ class QueueFullBoardView(discord.ui.View):
             ephemeral=True
         )
 
-    @discord.ui.button(label="ล้างกระดาน", style=discord.ButtonStyle.red, custom_id="queue_board_clear", row=2)
+    @discord.ui.button(label="ลบจากกระดานข้าม", style=discord.ButtonStyle.red, custom_id="queue_board_remove_skipped", row=2)
+    async def remove_skipped_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """ลบคนที่เลือกออกจากกระดานถูกข้าม"""
+        pool = await db.get_pool()
+        skipped_rows = await pool.fetch(
+            "SELECT user_id FROM queue_skipped WHERE guild_id = $1 ORDER BY skipped_at ASC",
+            interaction.guild.id
+        )
+        if not skipped_rows:
+            return await interaction.response.send_message("กระดานถูกข้ามว่างอยู่", ephemeral=True)
+        await interaction.response.send_message(
+            "เลือกสมาชิกที่จะลบออกจากกระดานถูกข้าม:",
+            view=QueueRemoveSkippedSelectView(),
+            ephemeral=True
+        )
+
+    @discord.ui.button(label="ล้างกระดาน", style=discord.ButtonStyle.danger, custom_id="queue_board_clear", row=2)
     async def clear_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         """ล้างทั้ง queue และ queue_skipped"""
         # ยกเลิก timer
@@ -1626,17 +1642,48 @@ class QueueUrgentCallSelectView(discord.ui.View):
             interaction.guild.id, target.id, interaction.user.id
         )
 
-        # เริ่ม timer 5 นาที
+        # เริ่ม timer 1 นาที
         _call_timers[interaction.guild.id] = asyncio.create_task(
             _auto_skip_after_timeout(interaction.guild, target.id, interaction.channel.id)
         )
 
         announce = discord.Embed(
             title="🚀 เรียกด่วน!",
-            description=f"{target.mention} กรุณาเข้ามาได้เลย\n⏰ มีเวลา 5 นาที",
+            description=f"{target.mention} กรุณาเข้ามาได้เลย\n⏰ มีเวลา 1 นาที",
             color=discord.Color.gold()
         )
         await interaction.response.send_message(embed=announce)
+        await refresh_all_boards(interaction.guild)
+
+
+class QueueRemoveSkippedSelectView(discord.ui.View):
+    """UserSelect สำหรับลบคนออกจากกระดานถูกข้าม"""
+    def __init__(self):
+        super().__init__(timeout=60)
+
+    @discord.ui.select(cls=discord.ui.UserSelect, placeholder="เลือกสมาชิกที่จะลบออกจากกระดานถูกข้าม")
+    async def select_user(self, interaction: discord.Interaction, select: discord.ui.UserSelect):
+        target = select.values[0]
+        if not isinstance(target, discord.Member):
+            target = interaction.guild.get_member(target.id)
+        if target is None:
+            return await interaction.response.send_message("❌ ไม่พบสมาชิกในเซิร์ฟเวอร์", ephemeral=True)
+        pool = await db.get_pool()
+        deleted = await pool.execute(
+            "DELETE FROM queue_skipped WHERE guild_id = $1 AND user_id = $2",
+            interaction.guild.id, target.id
+        )
+        if deleted == "DELETE 0":
+            return await interaction.response.send_message(
+                f"❌ {target.mention} ไม่ได้อยู่ในกระดานถูกข้าม", ephemeral=True
+            )
+        await pool.execute(
+            "INSERT INTO queue_history (guild_id, user_id, action, actioned_by) VALUES ($1, $2, 'removed_from_skipped', $3)",
+            interaction.guild.id, target.id, interaction.user.id
+        )
+        await interaction.response.send_message(
+            f"✅ ลบ {target.mention} ออกจากกระดานถูกข้ามแล้ว", ephemeral=True
+        )
         await refresh_all_boards(interaction.guild)
 
 
