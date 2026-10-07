@@ -1271,7 +1271,7 @@ class QueueFullBoardView(discord.ui.View):
         if not skipped_rows:
             return await interaction.response.send_message("กระดานถูกข้ามว่างอยู่", ephemeral=True)
         await interaction.response.send_message(
-            "เลือกสมาชิกที่จะลบออกจากกระดานถูกข้าม:",
+            "เลือกสมาชิกที่จะลบออกจากกระดานถูกข้าม หรือกด **ล้างทั้งหมด**:",
             view=QueueRemoveSkippedSelectView(),
             ephemeral=True
         )
@@ -1683,6 +1683,25 @@ class QueueRemoveSkippedSelectView(discord.ui.View):
         )
         await interaction.response.send_message(
             f"✅ ลบ {target.mention} ออกจากกระดานถูกข้ามแล้ว", ephemeral=True
+        )
+        await refresh_all_boards(interaction.guild)
+
+    @discord.ui.button(label="ล้างทั้งหมด", style=discord.ButtonStyle.danger, row=1)
+    async def clear_all_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """ล้างกระดานถูกข้ามทั้งหมดในครั้งเดียว (ไม่แตะคิวหลัก)"""
+        pool = await db.get_pool()
+        deleted_rows = await pool.fetch(
+            "DELETE FROM queue_skipped WHERE guild_id = $1 RETURNING user_id",
+            interaction.guild.id
+        )
+        if not deleted_rows:
+            return await interaction.response.send_message("กระดานถูกข้ามว่างอยู่แล้ว", ephemeral=True)
+        await pool.executemany(
+            "INSERT INTO queue_history (guild_id, user_id, action, actioned_by) VALUES ($1, $2, 'removed_from_skipped', $3)",
+            [(interaction.guild.id, r["user_id"], interaction.user.id) for r in deleted_rows]
+        )
+        await interaction.response.send_message(
+            f"✅ ล้างกระดานถูกข้ามทั้งหมดแล้ว ({len(deleted_rows)} คน)", ephemeral=True
         )
         await refresh_all_boards(interaction.guild)
 
