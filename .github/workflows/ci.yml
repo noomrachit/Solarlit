@@ -65,3 +65,51 @@ jobs:
 
       - name: Syntax check
         run: python -m py_compile moonlit_bot.py database.py
+
+  bot-integrity:
+    name: Bot file integrity
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # กันไฟล์บอทถูกตัด/วางทับ (เหตุคอมมิต 5a56130) — ถ้าตั้งใจลบโค้ดจำนวนมากจริง
+      # ให้เพิ่ม label "allow-shrink" ใน PR
+      - name: Check bot files
+        env:
+          ALLOW_SHRINK: ${{ contains(github.event.pull_request.labels.*.name, 'allow-shrink') && '1' || '0' }}
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            python scripts/check_bot_integrity.py --base "origin/${{ github.base_ref }}"
+          else
+            python scripts/check_bot_integrity.py --base "${{ github.event.before }}"
+          fi
+
+      - name: Voice relay smoke test (หัวหน้า 2 + ลูกน้อง 16)
+        working-directory: voicerelay
+        run: |
+          pip install -q -r requirements.txt
+          python - <<'PY'
+          import os, runpy, asyncio
+          os.environ["LISTENER_BOT_TOKEN"] = "x"
+          os.environ["LISTENER_BOT_TOKEN_2"] = "x2"
+          for i in range(1, 17):
+              os.environ[f"SPEAKER_BOT_TOKEN_{i}"] = f"s{i}"
+          g = runpy.run_path("relay_bot.py", run_name="ci_smoke")
+          async def t():
+              bots = [g["commands"].Bot(command_prefix="!", intents=g["discord"].Intents.default())
+                      for _ in g["SPEAKER_TOKENS"]]
+              pool = g["SpeakerPool"](bots)
+              units = [g["RelayUnit"]("หัวหน้า", "x", pool), g["RelayUnit"]("หัวหน้า 2", "x2", pool)]
+              assert len(bots) == 16 and len(units) == 2
+              assert "relay" in [c.name for c in units[0].bot.tree.get_commands()]
+              print("✅ สร้างหัวหน้า 2 + ลูกน้อง 16 ได้ครบ")
+          asyncio.run(t())
+          PY
