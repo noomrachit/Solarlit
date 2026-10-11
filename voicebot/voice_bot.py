@@ -15,9 +15,6 @@ from discord.ext import commands
 from dotenv import load_dotenv
 from aiohttp import web
 
-import pytesseract
-from PIL import Image, ImageOps
-
 import party_ocr
 
 import matplotlib
@@ -1161,6 +1158,43 @@ async def player_list(interaction: discord.Interaction):
         await interaction.followup.send(embed=embed, ephemeral=True)
 
 
+@tree.command(name="announce", description="ส่งประกาศพร้อมรูปไปห้องที่กำหนด (แอดมิน)")
+@has_mod_perms()
+@app_commands.describe(
+    text="ข้อความประกาศ",
+    image="รูปภาพ (แนบไฟล์)",
+    channel="ห้องที่จะส่งประกาศ (ไม่ใส่ = ห้องปัจจุบัน)",
+    role="แท็ก Role นี้ไปด้วย (ไม่ใส่ = ไม่แท็กใคร)"
+)
+async def announce(
+    interaction: discord.Interaction,
+    text: str,
+    image: discord.Attachment,
+    channel: Optional[discord.TextChannel] = None,
+    role: Optional[discord.Role] = None
+):
+    if not image.content_type or not image.content_type.startswith("image/"):
+        await interaction.response.send_message("กรุณาส่งไฟล์รูปภาพเท่านั้น", ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    target = channel or interaction.channel
+    content = f"{role.mention}\n{text}" if role else text
+
+    try:
+        file = await image.to_file()
+        await target.send(
+            content=content,
+            file=file,
+            allowed_mentions=discord.AllowedMentions(roles=True)
+        )
+        await interaction.followup.send(f"✅ ส่งประกาศไปที่ {target.mention} แล้ว", ephemeral=True)
+    except discord.Forbidden:
+        await interaction.followup.send(f"บอทไม่มีสิทธิ์ส่งข้อความใน {target.mention}", ephemeral=True)
+    except discord.HTTPException as e:
+        await interaction.followup.send(f"❌ ส่งไม่สำเร็จ: {e}", ephemeral=True)
+
+
 @tree.command(name="remind-introduction", description="แจ้งเตือน (แท็ก) สมาชิกที่ยังไม่ได้แนะนำตัว (แอดมิน)")
 @has_mod_perms()
 @app_commands.describe(
@@ -1713,31 +1747,30 @@ async def _do_leave(interaction: discord.Interaction, edit: bool = False):
     """บันทึกลา + เอาออกจากตี้ (+ ดึงพระแทนถ้าเป็นพระ) แล้วอัปเดตกระดาน"""
     pool = await db.get_pool()
     guild_id, uid = interaction.guild.id, interaction.user.id
-    if True:
-        async with pool.acquire() as conn:
-            async with conn.transaction():
-                await conn.execute(
-                    "INSERT INTO party_leave (guild_id, discord_user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-                    guild_id, uid
-                )
-                res = await _apply_leave(conn, guild_id, uid)
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "INSERT INTO party_leave (guild_id, discord_user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                guild_id, uid
+            )
+            res = await _apply_leave(conn, guild_id, uid)
 
-        if not res["in_table"]:
-            msg = "📋 บันทึกการลาแล้ว (คุณไม่ได้อยู่ในตารางปาร์ตี้)"
-        else:
-            me = res["me"]
-            msg = f"📋 บันทึกการลาแล้ว — ออกจาก {_party_label(me['group_name'], me['party_num'])} ({me['character_class']})"
-            if res["is_priest"]:
-                sub = res["sub"]
-                if sub:
-                    msg += f"\n🔁 ดึงพระ **{sub['in_game_name']}** จาก {_party_label(sub['group_name'], sub['party_num'])} มาแทนแล้ว"
-                else:
-                    msg += "\n⚠️ ไม่มีตี้ไหนมีพระ 2 คน — ตี้นี้จะไม่มีพระ แจ้งแอดมินจัดการ"
-        if edit:
-            await interaction.response.edit_message(content=msg, view=None)
-        else:
-            await interaction.response.send_message(msg, ephemeral=True)
-        await refresh_party_boards(interaction.guild)
+    if not res["in_table"]:
+        msg = "📋 บันทึกการลาแล้ว (คุณไม่ได้อยู่ในตารางปาร์ตี้)"
+    else:
+        me = res["me"]
+        msg = f"📋 บันทึกการลาแล้ว — ออกจาก {_party_label(me['group_name'], me['party_num'])} ({me['character_class']})"
+        if res["is_priest"]:
+            sub = res["sub"]
+            if sub:
+                msg += f"\n🔁 ดึงพระ **{sub['in_game_name']}** จาก {_party_label(sub['group_name'], sub['party_num'])} มาแทนแล้ว"
+            else:
+                msg += "\n⚠️ ไม่มีตี้ไหนมีพระ 2 คน — ตี้นี้จะไม่มีพระ แจ้งแอดมินจัดการ"
+    if edit:
+        await interaction.response.edit_message(content=msg, view=None)
+    else:
+        await interaction.response.send_message(msg, ephemeral=True)
+    await refresh_party_boards(interaction.guild)
 
 
 class PartyClaimNameView(discord.ui.View):
@@ -1794,46 +1827,45 @@ class PartyClaimNameView(discord.ui.View):
 
 
 async def _do_cancel_leave(interaction: discord.Interaction):
-    if True:
-        pool = await db.get_pool()
-        guild_id, uid = interaction.guild.id, interaction.user.id
-        note = ""
-        async with pool.acquire() as conn:
-            async with conn.transaction():
-                lv = await conn.fetchrow(
-                    "DELETE FROM party_leave WHERE guild_id = $1 AND discord_user_id = $2 RETURNING *", guild_id, uid
-                )
-                if not lv:
-                    return await interaction.response.send_message("คุณไม่ได้อยู่ในสถานะลา", ephemeral=True)
+    pool = await db.get_pool()
+    guild_id, uid = interaction.guild.id, interaction.user.id
+    note = ""
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            lv = await conn.fetchrow(
+                "DELETE FROM party_leave WHERE guild_id = $1 AND discord_user_id = $2 RETURNING *", guild_id, uid
+            )
+            if not lv:
+                return await interaction.response.send_message("คุณไม่ได้อยู่ในสถานะลา", ephemeral=True)
 
-                if lv["orig_group"]:
-                    g, p, s = lv["orig_group"], lv["orig_party"], lv["orig_slot"]
-                    # ถ้าเคยดึงพระมาแทน และพระคนนั้นยังอยู่ช่องนี้ → ส่งกลับตี้เดิม
-                    if lv["sub_user_id"]:
-                        await conn.execute(
-                            "UPDATE party_assignments SET group_name = $3, party_num = $4, slot = $5 "
-                            "WHERE guild_id = $1 AND discord_user_id = $2 AND group_name = $6 AND party_num = $7",
-                            guild_id, lv["sub_user_id"], lv["sub_group"], lv["sub_party"], lv["sub_slot"], g, p
-                        )
-                    count = await conn.fetchval(
-                        "SELECT COUNT(*) FROM party_assignments WHERE guild_id = $1 AND group_name = $2 AND party_num = $3",
-                        guild_id, g, p
+            if lv["orig_group"]:
+                g, p, s = lv["orig_group"], lv["orig_party"], lv["orig_slot"]
+                # ถ้าเคยดึงพระมาแทน และพระคนนั้นยังอยู่ช่องนี้ → ส่งกลับตี้เดิม
+                if lv["sub_user_id"]:
+                    await conn.execute(
+                        "UPDATE party_assignments SET group_name = $3, party_num = $4, slot = $5 "
+                        "WHERE guild_id = $1 AND discord_user_id = $2 AND group_name = $6 AND party_num = $7",
+                        guild_id, lv["sub_user_id"], lv["sub_group"], lv["sub_party"], lv["sub_slot"], g, p
                     )
-                    if count < PARTY_SIZE:
-                        await conn.execute(
-                            """
-                            INSERT INTO party_assignments (guild_id, discord_user_id, group_name, party_num, slot, character_class, in_game_name)
-                            VALUES ($1, $2, $3, $4, $5, $6, $7)
-                            ON CONFLICT (guild_id, discord_user_id) DO NOTHING
-                            """,
-                            guild_id, uid, g, p, s, lv["orig_class"], lv["orig_name"]
-                        )
-                        note = f"\n↩️ กลับเข้า {_party_label(g, p)} ช่องเดิมแล้ว"
-                    else:
-                        note = f"\n⚠️ {_party_label(g, p)} เต็มแล้ว ยังไม่ได้ใส่กลับ แจ้งแอดมินจัดการ"
+                count = await conn.fetchval(
+                    "SELECT COUNT(*) FROM party_assignments WHERE guild_id = $1 AND group_name = $2 AND party_num = $3",
+                    guild_id, g, p
+                )
+                if count < PARTY_SIZE:
+                    await conn.execute(
+                        """
+                        INSERT INTO party_assignments (guild_id, discord_user_id, group_name, party_num, slot, character_class, in_game_name)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7)
+                        ON CONFLICT (guild_id, discord_user_id) DO NOTHING
+                        """,
+                        guild_id, uid, g, p, s, lv["orig_class"], lv["orig_name"]
+                    )
+                    note = f"\n↩️ กลับเข้า {_party_label(g, p)} ช่องเดิมแล้ว"
+                else:
+                    note = f"\n⚠️ {_party_label(g, p)} เต็มแล้ว ยังไม่ได้ใส่กลับ แจ้งแอดมินจัดการ"
 
-        await interaction.response.send_message("✅ ยกเลิกการลาแล้ว" + note, ephemeral=True)
-        await refresh_party_boards(interaction.guild)
+    await interaction.response.send_message("✅ ยกเลิกการลาแล้ว" + note, ephemeral=True)
+    await refresh_party_boards(interaction.guild)
 
 
 party_group = app_commands.Group(name="party", description="ระบบจัดปาร์ตี้")
@@ -2073,6 +2105,7 @@ async def help_cmd(interaction: discord.Interaction):
     embed.add_field(name="/player-search", value="ค้นหาผู้เล่นจากชื่อในเกมหรือชื่อในดิส (แอดมิน)", inline=False)
     embed.add_field(name="/player-list", value="ดูตารางรายชื่อผู้เล่นที่แนะนำตัวไว้ทั้งหมด (แอดมิน)", inline=False)
     embed.add_field(name="/player-remove", value="ลบข้อมูลแนะนำตัวของสมาชิก (แอดมิน)", inline=False)
+    embed.add_field(name="/announce", value="ส่งประกาศพร้อมรูปไปห้องที่กำหนด (แอดมิน)", inline=False)
     embed.add_field(name="/remind-introduction-dm", value="ส่ง DM เด้งแจ้งเตือนหาคนที่ยังไม่แนะนำตัว (แอดมิน)", inline=False)
     embed.add_field(name="/restore-introductions", value="กู้ข้อมูลแนะนำตัวคืนจาก Embed เก่า (แอดมิน)", inline=False)
     embed.add_field(name="/remind-introduction", value="แท็กแจ้งเตือนสมาชิกที่ยังไม่ได้แนะนำตัว (แอดมิน)", inline=False)
