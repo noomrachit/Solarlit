@@ -1,6 +1,5 @@
 import app from "./app";
 import { logger } from "./lib/logger";
-import { ensureBillingSchema } from "./db/billingPool";
 
 const rawPort = process.env["PORT"];
 
@@ -15,11 +14,6 @@ const port = Number(rawPort);
 if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
-
-ensureBillingSchema().catch((err) => {
-  // Non-fatal: billing routes just 503 until the DB is reachable/configured.
-  logger.error({ err }, "Failed to ensure billing schema");
-});
 
 app.listen(port, (err) => {
   if (err) {
