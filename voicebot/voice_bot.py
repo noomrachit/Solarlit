@@ -86,6 +86,7 @@ tree = bot.tree
 async def setup_hook():
     bot.add_view(IntroductionBoardView())
     bot.add_view(PartyLeaveBoardView())
+    bot.add_view(ShowcaseBoardView())
 
 # ห้องที่บอทยามติดตามได้ ต้องรวม Stage Channel ด้วย ไม่ใช่แค่ Voice Channel ธรรมดา
 # เพราะห้องถ่ายทอดสด/ห้องหลักของ Voice Relay มักตั้งเป็น Stage Channel (ตามคำแนะนำใน docs.html)
@@ -1195,6 +1196,162 @@ async def announce(
         await interaction.followup.send(f"❌ ส่งไม่สำเร็จ: {e}", ephemeral=True)
 
 
+class ShowcaseBoardView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="📸 โชว์ตัวละคร", style=discord.ButtonStyle.primary, custom_id="showcase_board_open")
+    async def open_form(self, interaction: discord.Interaction, button: discord.ui.Button):
+        pool = await db.get_pool()
+        row = await pool.fetchrow(
+            "SELECT result_channel FROM showcase_settings WHERE guild_id = $1", interaction.guild.id
+        )
+        if not row:
+            await interaction.response.send_message(
+                "แอดมินยังไม่ได้ตั้งค่ากระดานนี้ — แจ้งแอดมินให้รัน `/setup-showcase`", ephemeral=True
+            )
+            return
+
+        await interaction.response.send_message(
+            "📩 เช็ค DM จากบอท แล้วส่งรูปตัวละครของคุณกลับมาในแชทนั้นได้เลย (ภายใน 5 นาที)", ephemeral=True
+        )
+
+        try:
+            dm = await interaction.user.create_dm()
+            await dm.send(
+                "ส่งรูปตัวละครของคุณมาที่แชทนี้ได้เลย (ภายใน 5 นาที)\n"
+                "จะพิมพ์ชื่อในเกม/อาชีพ/ปาร์ตี้แนบไปกับรูปด้วยก็ได้ ไม่บังคับ"
+            )
+        except discord.Forbidden:
+            await interaction.followup.send(
+                "ส่ง DM ไม่สำเร็จ — เปิดสิทธิ์รับ DM จากสมาชิกเซิร์ฟเวอร์นี้ก่อนแล้วลองใหม่", ephemeral=True
+            )
+            return
+
+        def check(m: discord.Message) -> bool:
+            return (
+                m.author.id == interaction.user.id
+                and isinstance(m.channel, discord.DMChannel)
+                and len(m.attachments) > 0
+            )
+
+        try:
+            msg = await bot.wait_for("message", check=check, timeout=300)
+        except asyncio.TimeoutError:
+            await dm.send("⏰ หมดเวลาแล้ว กดปุ่มที่กระดานใหม่อีกครั้งได้เลย")
+            return
+
+        image = msg.attachments[0]
+        if not image.content_type or not image.content_type.startswith("image/"):
+            await dm.send("ไฟล์ที่ส่งมาไม่ใช่รูปภาพ — กดปุ่มที่กระดานใหม่อีกครั้ง")
+            return
+
+        result_channel = interaction.guild.get_channel(row["result_channel"])
+        if result_channel is None:
+            await dm.send("❌ หาห้องปลายทางไม่เจอ แจ้งแอดมินตรวจสอบ `/setup-showcase` อีกครั้ง")
+            return
+
+        try:
+            file = await image.to_file()
+            embed = discord.Embed(description=msg.content or None, color=0x5865F2)
+            embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
+            embed.set_image(url=f"attachment://{file.filename}")
+            await result_channel.send(embed=embed, file=file)
+        except discord.Forbidden:
+            await dm.send(f"❌ บอทไม่มีสิทธิ์ส่งข้อความใน {result_channel.mention} — แจ้งแอดมินเช็คสิทธิ์บอท")
+            return
+        except discord.HTTPException as e:
+            await dm.send(f"❌ โพสต์ไม่สำเร็จ: {e}")
+            return
+
+        await pool.execute(
+            """
+            INSERT INTO character_showcases (guild_id, discord_user_id, caption)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (guild_id, discord_user_id) DO UPDATE SET caption = $3, posted_at = NOW()
+            """,
+            interaction.guild.id, interaction.user.id, msg.content or ""
+        )
+        await dm.send(f"✅ โพสต์โชว์ที่ {result_channel.mention} เรียบร้อยแล้ว")
+
+
+@tree.command(name="setup-showcase", description="ตั้งค่ากระดานโชว์ตัวละคร (ปุ่มกด) + ห้องที่จะโพสต์ผลลัพธ์")
+@has_mod_perms()
+@app_commands.describe(
+    board_channel="ห้องที่จะโพสต์กระดาน (ปุ่มกด)",
+    result_channel="ห้องที่จะโพสต์ผลโชว์ตัวละครที่กรอกเสร็จแล้ว"
+)
+async def setup_showcase(
+    interaction: discord.Interaction,
+    board_channel: discord.TextChannel,
+    result_channel: discord.TextChannel
+):
+    pool = await db.get_pool()
+    await pool.execute("""
+        INSERT INTO showcase_settings (guild_id, board_channel, result_channel) VALUES ($1, $2, $3)
+        ON CONFLICT (guild_id) DO UPDATE SET board_channel = $2, result_channel = $3
+    """, interaction.guild.id, board_channel.id, result_channel.id)
+
+    embed = discord.Embed(
+        title="🎮 กระดานโชว์ตัวละคร",
+        description="กดปุ่มด้านล่างเพื่อส่งรูปตัวละครของคุณ (จะแนบชื่อในเกม/อาชีพ/ปาร์ตี้ไปด้วยก็ได้)",
+        color=0xFEE75C
+    )
+    await board_channel.send(embed=embed, view=ShowcaseBoardView())
+
+    await interaction.response.send_message(
+        f"ตั้งกระดานโชว์ตัวละครที่ {board_channel.mention} เรียบร้อยแล้ว — ผลลัพธ์จะไปโพสต์ที่ {result_channel.mention}",
+        ephemeral=True
+    )
+
+
+@tree.command(name="remind-showcase", description="แจ้งเตือน (แท็ก) สมาชิกที่ยังไม่เคยโชว์ตัวละคร (แอดมิน)")
+@has_mod_perms()
+@app_commands.describe(
+    channel="ห้องที่จะส่งข้อความแจ้งเตือน (ไม่ใส่ = ห้องปัจจุบัน)",
+    role="แจ้งเตือนเฉพาะคนที่มี Role นี้ (ไม่ใส่ = สมาชิกทุกคน)"
+)
+async def remind_showcase(
+    interaction: discord.Interaction,
+    channel: Optional[discord.TextChannel] = None,
+    role: Optional[discord.Role] = None
+):
+    await interaction.response.defer(ephemeral=True)
+    target = channel or interaction.channel
+    pool = await db.get_pool()
+    shown = {
+        r["discord_user_id"] for r in await pool.fetch(
+            "SELECT discord_user_id FROM character_showcases WHERE guild_id = $1", interaction.guild.id
+        )
+    }
+    members = role.members if role else interaction.guild.members
+    missing = [m for m in members if not m.bot and m.id not in shown]
+    if not missing:
+        await interaction.followup.send("✅ ทุกคนโชว์ตัวละครครบแล้ว", ephemeral=True)
+        return
+
+    settings_row = await pool.fetchrow("SELECT board_channel FROM showcase_settings WHERE guild_id = $1", interaction.guild.id)
+    board = interaction.guild.get_channel(settings_row["board_channel"]) if settings_row and settings_row["board_channel"] else None
+    where = f" ที่ {board.mention}" if board else ""
+    header = f"📢 **ยังไม่ได้โชว์ตัวละคร {len(missing)} คน** — กรุณากดปุ่ม 📸 โชว์ตัวละคร{where}\n"
+
+    chunks, cur = [], header
+    for m in missing:
+        piece = m.mention + " "
+        if len(cur) + len(piece) > 1900:
+            chunks.append(cur)
+            cur = ""
+        cur += piece
+    chunks.append(cur)
+    try:
+        for c in chunks:
+            await target.send(c, allowed_mentions=discord.AllowedMentions(users=True))
+    except discord.Forbidden:
+        await interaction.followup.send(f"บอทไม่มีสิทธิ์ส่งข้อความใน {target.mention}", ephemeral=True)
+        return
+    await interaction.followup.send(f"ส่งแจ้งเตือน {len(missing)} คนที่ {target.mention} แล้ว", ephemeral=True)
+
+
 @tree.command(name="remind-introduction", description="แจ้งเตือน (แท็ก) สมาชิกที่ยังไม่ได้แนะนำตัว (แอดมิน)")
 @has_mod_perms()
 @app_commands.describe(
@@ -2106,6 +2263,8 @@ async def help_cmd(interaction: discord.Interaction):
     embed.add_field(name="/player-list", value="ดูตารางรายชื่อผู้เล่นที่แนะนำตัวไว้ทั้งหมด (แอดมิน)", inline=False)
     embed.add_field(name="/player-remove", value="ลบข้อมูลแนะนำตัวของสมาชิก (แอดมิน)", inline=False)
     embed.add_field(name="/announce", value="ส่งประกาศพร้อมรูปไปห้องที่กำหนด (แอดมิน)", inline=False)
+    embed.add_field(name="/setup-showcase", value="ตั้งกระดานโชว์ตัวละคร (ปุ่มกด) + ห้องผลลัพธ์ (แอดมิน)", inline=False)
+    embed.add_field(name="/remind-showcase", value="แท็กแจ้งเตือนสมาชิกที่ยังไม่เคยโชว์ตัวละคร (แอดมิน)", inline=False)
     embed.add_field(name="/remind-introduction-dm", value="ส่ง DM เด้งแจ้งเตือนหาคนที่ยังไม่แนะนำตัว (แอดมิน)", inline=False)
     embed.add_field(name="/restore-introductions", value="กู้ข้อมูลแนะนำตัวคืนจาก Embed เก่า (แอดมิน)", inline=False)
     embed.add_field(name="/remind-introduction", value="แท็กแจ้งเตือนสมาชิกที่ยังไม่ได้แนะนำตัว (แอดมิน)", inline=False)

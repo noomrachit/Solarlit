@@ -138,6 +138,20 @@ async def init_db():
                 channel_id BIGINT NOT NULL,
                 message_id BIGINT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS showcase_settings (
+                guild_id BIGINT PRIMARY KEY,
+                board_channel BIGINT NOT NULL,
+                result_channel BIGINT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS character_showcases (
+                guild_id BIGINT NOT NULL,
+                discord_user_id BIGINT NOT NULL,
+                caption TEXT,
+                posted_at TIMESTAMPTZ DEFAULT NOW(),
+                PRIMARY KEY (guild_id, discord_user_id)
+            );
             """
         )
 
