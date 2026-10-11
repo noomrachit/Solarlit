@@ -78,7 +78,35 @@ intents.guilds = True
 intents.voice_states = True   # จำเป็นสำหรับ on_voice_state_update
 intents.members = True        # ใช้แสดงชื่อสมาชิกให้ถูกต้อง (ต้องเปิดใน Discord Developer Portal ด้วย)
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+def _top_command_name(command: app_commands.Command) -> str:
+    """ชื่อคำสั่งระดับบนสุด เช่น '/party generate' -> 'party' (ใช้เป็นหน่วยเปิด/ปิดคำสั่ง)"""
+    root = command.root_parent
+    return root.name if root else command.name
+
+
+class GuardedCommandTree(app_commands.CommandTree):
+    """เช็คก่อนรันทุก slash command ว่าแอดมินปิดคำสั่งนี้ไว้ (ผ่าน /command-toggle) หรือยัง"""
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.command is None or interaction.guild is None:
+            return True
+        name = _top_command_name(interaction.command)
+        if name == "command-toggle":  # กันปิดตัวเองจนเปิดกลับไม่ได้
+            return True
+        pool = await db.get_pool()
+        disabled = await pool.fetchval(
+            "SELECT 1 FROM disabled_commands WHERE guild_id = $1 AND command_name = $2",
+            interaction.guild.id, name
+        )
+        if disabled:
+            await interaction.response.send_message(
+                f"🔒 คำสั่งนี้ถูกปิดโดยแอดมิน (ใช้ `/command-toggle` เพื่อเปิดกลับ)", ephemeral=True
+            )
+            return False
+        return True
+
+
+bot = commands.Bot(command_prefix="!", intents=intents, tree_cls=GuardedCommandTree)
 tree = bot.tree
 
 
@@ -2208,6 +2236,80 @@ async def party_cancel(interaction: discord.Interaction):
 tree.add_command(party_group)
 
 
+# ─────────────────────────────────────────────
+# เปิด/ปิดคำสั่ง (ต่อเซิร์ฟเวอร์)
+# ─────────────────────────────────────────────
+
+class CommandToggleSelect(discord.ui.Select):
+    def __init__(self, options: list):
+        super().__init__(
+            placeholder="เลือกคำสั่งที่ต้องการเปิด/ปิด (เลือกได้หลายอัน)",
+            min_values=1, max_values=len(options), options=options
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        pool = await db.get_pool()
+        changed = []
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                for name in self.values:
+                    disabled = await conn.fetchval(
+                        "SELECT 1 FROM disabled_commands WHERE guild_id = $1 AND command_name = $2",
+                        interaction.guild.id, name
+                    )
+                    if disabled:
+                        await conn.execute(
+                            "DELETE FROM disabled_commands WHERE guild_id = $1 AND command_name = $2",
+                            interaction.guild.id, name
+                        )
+                        changed.append(f"🟢 /{name} — เปิดแล้ว")
+                    else:
+                        await conn.execute(
+                            "INSERT INTO disabled_commands (guild_id, command_name) VALUES ($1, $2) "
+                            "ON CONFLICT DO NOTHING",
+                            interaction.guild.id, name
+                        )
+                        changed.append(f"🔴 /{name} — ปิดแล้ว")
+        await interaction.response.edit_message(
+            content="✅ อัปเดตแล้ว:\n" + "\n".join(changed), view=None
+        )
+
+
+class CommandToggleView(discord.ui.View):
+    def __init__(self, options: list):
+        super().__init__(timeout=180)
+        self.add_item(CommandToggleSelect(options))
+
+
+@tree.command(name="command-toggle", description="เปิด/ปิดคำสั่งของบอทในเซิร์ฟเวอร์นี้ (เลือกได้หลายอันพร้อมกัน) (แอดมิน)")
+@has_mod_perms()
+async def command_toggle(interaction: discord.Interaction):
+    pool = await db.get_pool()
+    disabled_names = {
+        r["command_name"] for r in await pool.fetch(
+            "SELECT command_name FROM disabled_commands WHERE guild_id = $1", interaction.guild.id
+        )
+    }
+    names = sorted(
+        c.name for c in tree.get_commands() if c.name != "command-toggle"
+    )[:25]
+    options = [
+        discord.SelectOption(
+            label=f"/{name}",
+            description="🔴 ปิดอยู่" if name in disabled_names else "🟢 เปิดอยู่",
+            value=name
+        )
+        for name in names
+    ]
+    if not options:
+        await interaction.response.send_message("ไม่พบคำสั่งให้เลือก", ephemeral=True)
+        return
+    await interaction.response.send_message(
+        "เลือกคำสั่งที่ต้องการสลับสถานะ (เปิด↔ปิด) ได้หลายอันพร้อมกัน:",
+        view=CommandToggleView(options), ephemeral=True
+    )
+
+
 # Invite
 @tree.command(name="invite", description="รับลิงก์เชิญบอทเข้าเซิร์ฟเวอร์ (พร้อม permission ครบ รวม Manage Roles)")
 async def invite_cmd(interaction: discord.Interaction):
@@ -2274,6 +2376,7 @@ async def help_cmd(interaction: discord.Interaction):
     embed.add_field(name="/party leaveboard", value="โพสต์กระดานลา (ปุ่มลา/ยกเลิกลา) (แอดมิน)", inline=False)
     embed.add_field(name="/party rosterboard", value="โพสต์กระดานตารางปาร์ตี้แบบรูปภาพ (แอดมิน)", inline=False)
     embed.add_field(name="/party cancel", value="ยกเลิกระบบจัดปาร์ตี้ทั้งหมด (แอดมิน)", inline=False)
+    embed.add_field(name="/command-toggle", value="เปิด/ปิดคำสั่งของบอทในเซิร์ฟเวอร์นี้ เลือกได้หลายอันพร้อมกัน (แอดมิน)", inline=False)
     embed.add_field(name="/invite", value="รับลิงก์เชิญบอทพร้อม permission ครบ (รวม Manage Roles)", inline=False)
     embed.add_field(name="/ping", value="ตรวจสอบสถานะบอท", inline=False)
     await interaction.response.send_message(embed=embed, ephemeral=True)

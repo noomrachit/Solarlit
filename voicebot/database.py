@@ -152,6 +152,12 @@ async def init_db():
                 posted_at TIMESTAMPTZ DEFAULT NOW(),
                 PRIMARY KEY (guild_id, discord_user_id)
             );
+
+            CREATE TABLE IF NOT EXISTS disabled_commands (
+                guild_id BIGINT NOT NULL,
+                command_name TEXT NOT NULL,
+                PRIMARY KEY (guild_id, command_name)
+            );
             """
         )
 
