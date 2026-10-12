@@ -27,9 +27,6 @@ Environment variables:
 - ต้อง invite บอททุกตัวเข้าเซิร์ฟเวอร์เดียวกัน (คนละ token คนละแอป)
 - ต้องมี libopus ติดตั้งในระบบ (ดู nixpacks.toml)
 - จำนวนห้องย่อยที่กระจายพร้อมกันได้ ถูกจำกัดด้วยจำนวนบอทพูดที่ตั้งค่าไว้เท่านั้น (แชร์ข้ามหัวหน้าทุกตัว)
-- โควต้าต่อเซิร์ฟเวอร์ (_quota_ok) นับเฉพาะบอทของ "หัวหน้าตัวนั้นๆ" เอง ไม่รวมของหัวหน้าอีกตัวในเซิร์ฟเวอร์
-  เดียวกัน (เหมือนพฤติกรรมเดิมตอนมีหัวหน้าตัวเดียว) — ตอนนี้ billing_access ยังเป็น stub คืน limit=99 เสมอ
-  ไม่กระทบอะไรจริง จนกว่าจะมีระบบ tier จริงมาแทนที่
 
 /relay setrole <role> จำกัดให้กระจายเสียงเฉพาะคนที่มีบทบาทนี้ในห้องหลัก — คนอื่นยังพูดคุยในห้องหลัก
 ได้ตามปกติ (ไม่ได้ถูกตัดไมค์/เตะออก) แค่เสียงของเขาจะไม่ถูกป้อนเข้า mixer จึงไม่ถูกส่งต่อไปห้องย่อย
@@ -53,8 +50,6 @@ from discord.ext import commands
 from discord.ext import voice_recv
 from dotenv import load_dotenv
 from aiohttp import web
-
-import access as billing_access
 
 load_dotenv()
 
@@ -352,20 +347,6 @@ def has_relay_perms():
     return app_commands.check(predicate)
 
 
-async def global_billing_check(interaction: discord.Interaction) -> bool:
-    """เช็คสิทธิ์สมาชิกก่อนทุกคำสั่ง /relay (ยกเว้นเซิร์ฟเวอร์ที่อยู่ใน EXEMPT_GUILD_IDS)"""
-    if not interaction.guild:
-        return True
-    allowed, reason = await billing_access.check_guild_access(interaction.guild.id)
-    if not allowed:
-        try:
-            await interaction.response.send_message(reason, ephemeral=True)
-        except Exception:
-            pass
-        return False
-    return True
-
-
 class RelayUnit:
     """
     หนึ่ง "หัวหน้า" (listener bot) พร้อม state ที่เดิมเป็น global เดี่ยว — ตอนนี้แยกเป็นของตัวเองแต่ละตัว
@@ -388,17 +369,13 @@ class RelayUnit:
         self.listener_binding: dict = {"channel_id": None}
         self.speaker_bindings: dict = {}  # index -> {"channel_id": ...}
         self.guild_id: Optional[int] = None  # guild ที่กำลังฟังอยู่ตอนนี้ (ไว้คิดโควต้า)
-        self.last_speaking_error: Optional[str] = None  # "quota" | "not_invited" | None — อ่านหลังเรียก start_speaking*
+        self.last_speaking_error: Optional[str] = None  # "not_invited" | None — อ่านหลังเรียก start_speaking*
 
         intents = discord.Intents.default()
         intents.voice_states = True
         intents.guilds = True
         self.bot = commands.Bot(command_prefix="!", intents=intents)
         self.tree = self.bot.tree
-        # app_commands.CommandTree ไม่มี decorator @tree.check แบบ commands.Bot — ต้องตั้งผ่าน
-        # interaction_check ตรงๆ แทน (assign ฟังก์ชันเข้า instance attribute เพื่อ override
-        # CommandTree.interaction_check ที่ปกติ return True เฉยๆ)
-        self.tree.interaction_check = global_billing_check
 
         self._build_commands()
         self._register_events()
@@ -425,30 +402,11 @@ class RelayUnit:
                 await guild.voice_client.disconnect(force=True)
         log.info(f"[{self.name}] ออกจากห้องแล้ว")
 
-    async def _quota_ok(self, guild_id: int) -> bool:
-        """
-        เช็คโควต้าจำนวนบอทตามแพ็กเกจของเซิร์ฟเวอร์นี้ ก่อนเปิดบอทพูดตัวใหม่
-        (ตอนนี้ billing_access ยังเป็น stub คืน limit=99 เสมอ เก็บ plumbing นี้ไว้รอวันมีระบบ tier จริง)
-        นับเฉพาะบอทฟัง+บอทพูดของ "unit นี้" เท่านั้น (เหมือนพฤติกรรมเดิมตอนมี unit เดียว) ไม่รวมของหัวหน้าตัวอื่น
-        """
-        limit = await billing_access.get_relay_bot_limit(guild_id)
-        current_bots_in_use = (1 if self.relay_active else 0) + len(self.pool.indices_for(self))
-        if current_bots_in_use + 1 > limit:
-            log.warning(
-                f"[{self.name}] ปฏิเสธการเข้าห้อง: เกินโควต้าแพ็กเกจของเซิร์ฟเวอร์ "
-                f"(ใช้อยู่ {current_bots_in_use}/{limit} บอท) — อัปเกรดแพ็กเกจเพื่อเพิ่มจำนวนห้องที่ถ่ายทอดพร้อมกันได้"
-            )
-            self.last_speaking_error = "quota"
-            return False
-        return True
-
     async def start_speaking(self, channel: discord.VoiceChannel) -> Optional[int]:
         """จองบอทพูดตัวที่ว่างจากพูลกลาง (ตัวไหนก็ได้) แล้วเข้าห้องย่อย — ใช้กับ /relay addtarget (manual)"""
         self.last_speaking_error = None
         index = self.pool.free_index()
         if index is None:
-            return None
-        if not await self._quota_ok(channel.guild.id):
             return None
         if not self.pool.claim(index, self):
             return None
@@ -463,8 +421,6 @@ class RelayUnit:
         คืน False เฉยๆ ถ้า index นี้มีคนอื่นถือ "สด" อยู่ก่อนแล้ว (ไม่ raise, ให้ผู้เรียก log เอง)
         """
         self.last_speaking_error = None
-        if not await self._quota_ok(channel.guild.id):
-            return False
         if not self.pool.claim(index, self):
             return False
         return await self._connect_speaker(index, channel)
@@ -538,11 +494,6 @@ class RelayUnit:
             await interaction.response.defer(ephemeral=True)
             index = await unit.start_speaking(channel)
             if index is None:
-                if unit.last_speaking_error == "quota":
-                    return await interaction.followup.send(
-                        "❌ ใช้บอทครบตามโควต้าแพ็กเกจแล้ว อัปเกรดแพ็กเกจเพื่อถ่ายทอดได้หลายห้องขึ้นได้ที่เว็บไซต์",
-                        ephemeral=True
-                    )
                 if unit.last_speaking_error == "not_invited":
                     return await interaction.followup.send(
                         "❌ บอทพูดตัวที่เลือกยังไม่ได้ invite เข้าเซิร์ฟเวอร์นี้ (หรือมองไม่เห็นห้องนี้)",
