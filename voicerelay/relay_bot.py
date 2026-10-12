@@ -886,10 +886,15 @@ async def mixer_pump(units: list, pool: SpeakerPool):
         for unit in units:
             if not unit.relay_active:
                 continue
+            # ต้อง pop_frame() ทุก tick แม้ยังไม่มีบอทพูดตัวไหนผูกอยู่เลย (my_indices ว่าง) —
+            # ไม่งั้น RelaySink.write() ที่ feed() เข้า mixer.buffers ตลอดเวลาจะสะสมเสียงค้างไว้ไม่มีเพดาน
+            # (ไม่มีใครมาดึงออกไปใช้) พอมีบอทพูดต่อเข้ามาทีหลัง เสียงค้างทั้งหมดจะไหลออกมาทีเดียว
+            # ฟังดูเหมือน "เสียงอัดเทป" เพราะเป็นเสียงที่พูดไปนานแล้วเพิ่งมาเล่นทีหลัง ไม่ realtime
+            # — pop ทิ้งทุก tick เพื่อให้ buffer โตเท่าที่ไม่มีคนฟังเท่านั้น ไม่สะสมข้ามช่วงเวลา
+            frame = unit.mixer.pop_frame()
             my_indices = pool.indices_for(unit)
             if not my_indices:
                 continue
-            frame = unit.mixer.pop_frame()
             for idx in my_indices:
                 q = pool.queues[idx]
                 try:
