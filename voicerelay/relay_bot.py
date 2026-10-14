@@ -660,6 +660,73 @@ class RelayUnit:
             lines.append("ต่อไปนี้: มีคนเข้าห้องย่อยไหน (คนแรก) → บอทพูดที่ผูกไว้ตามเข้าอัตโนมัติ / ห้องว่าง → ตามออกอัตโนมัติ")
             await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
+        @relay_group.command(
+            name="go",
+            description="สั่งครั้งเดียว: หัวหน้าเข้าห้องหลัก + ลูกน้องทุกตัวเข้าห้องย่อยตามที่ระบุ (สูงสุด 10 ห้อง)"
+        )
+        @has_relay_perms()
+        @app_commands.describe(
+            source="ห้องหลักที่หัวหน้าจะฟัง (Voice หรือ Stage)",
+            room1="ห้องลูกน้อง 1 (บังคับ)",
+            room2="ห้องลูกน้อง 2", room3="ห้องลูกน้อง 3", room4="ห้องลูกน้อง 4", room5="ห้องลูกน้อง 5",
+            room6="ห้องลูกน้อง 6", room7="ห้องลูกน้อง 7", room8="ห้องลูกน้อง 8", room9="ห้องลูกน้อง 9",
+            room10="ห้องลูกน้อง 10",
+        )
+        async def relay_go(
+            interaction: discord.Interaction,
+            source: Union[discord.VoiceChannel, discord.StageChannel],
+            room1: discord.VoiceChannel,
+            room2: Optional[discord.VoiceChannel] = None,
+            room3: Optional[discord.VoiceChannel] = None,
+            room4: Optional[discord.VoiceChannel] = None,
+            room5: Optional[discord.VoiceChannel] = None,
+            room6: Optional[discord.VoiceChannel] = None,
+            room7: Optional[discord.VoiceChannel] = None,
+            room8: Optional[discord.VoiceChannel] = None,
+            room9: Optional[discord.VoiceChannel] = None,
+            room10: Optional[discord.VoiceChannel] = None,
+        ):
+            await interaction.response.defer(ephemeral=True)
+
+            # ตัดห้องซ้ำ + ห้องเดียวกับห้องหลัก
+            rooms, seen = [], {source.id}
+            for r in (room1, room2, room3, room4, room5, room6, room7, room8, room9, room10):
+                if r is not None and r.id not in seen:
+                    seen.add(r.id)
+                    rooms.append(r)
+
+            lines = []
+            if not unit.relay_active:
+                try:
+                    await unit.start_listening(source)
+                    lines.append(f"🎧 {unit.name} เข้าห้องหลัก {source.mention}")
+                except Exception as e:
+                    return await interaction.followup.send(f"❌ เข้าห้องหลักไม่สำเร็จ: {e}", ephemeral=True)
+            else:
+                lines.append(f"🎧 {unit.name} ฟังห้องหลักอยู่แล้ว")
+
+            active = {pool.channel_map.get(i) for i in pool.indices_for(unit)}
+            ok = 0
+            for r in rooms:
+                if r.id in active:
+                    lines.append(f"↪️ {r.mention}: มีลูกน้องอยู่แล้ว")
+                    ok += 1
+                    continue
+                try:
+                    idx = await unit.start_speaking(r)
+                except Exception as e:
+                    lines.append(f"❌ {r.mention}: {e}")
+                    continue
+                if idx is None:
+                    why = "ยังไม่ได้เชิญบอทลูกน้องเข้าเซิร์ฟ" if unit.last_speaking_error == "not_invited" else "ลูกน้องว่างไม่พอ"
+                    lines.append(f"❌ {r.mention}: {why}")
+                    continue
+                lines.append(f"🔊 ลูกน้อง {idx + 1} → {r.mention}")
+                ok += 1
+
+            lines.insert(0, f"เข้าห้องสำเร็จ {ok}/{len(rooms)} ห้อง")
+            await interaction.followup.send("\n".join(lines), ephemeral=True)
+
         @relay_group.command(name="unbind", description="ยกเลิกการผูกอัตโนมัติทั้งหมดของหัวหน้าตัวนี้ (บอทจะไม่ตามเข้า-ออกห้องไหนอีก)")
         @has_relay_perms()
         async def relay_unbind(interaction: discord.Interaction):
