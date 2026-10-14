@@ -1,3 +1,4 @@
+import html
 import os
 from aiohttp import web
 
@@ -9,8 +10,29 @@ def _read_html(filename: str) -> str:
         return f.read()
 
 
+def _render_index() -> str:
+    """ใส่เลขพร้อมเพย์/ลิงก์ซัพพอร์ตจาก environment variable ของ Railway (ไม่เก็บไว้ใน git)"""
+    page = _read_html("index.html")
+    promptpay = os.getenv("PROMPTPAY_ID", "").strip()
+    promptpay_name = os.getenv("PROMPTPAY_NAME", "").strip()
+    support_url = os.getenv("SUPPORT_URL", "").strip()
+    page = page.replace("{{PROMPTPAY_ID}}", html.escape(promptpay or "ขอเลขจากแอดมิน"))
+    page = page.replace("{{PROMPTPAY_NAME}}", html.escape(promptpay_name))
+    if support_url.startswith("https://"):
+        page = page.replace("{{SUPPORT_URL}}", html.escape(support_url, quote=True))
+    else:
+        page = page.replace('<a class="btn primary" href="{{SUPPORT_URL}}" rel="noopener">เข้าเซิร์ฟเวอร์ซัพพอร์ต</a>', "")
+    return page
+
+
 async def index(request):
-    return web.Response(text=_read_html("index.html"), content_type="text/html", charset="utf-8")
+    return web.Response(text=_render_index(), content_type="text/html", charset="utf-8")
+
+
+def _redirect(target: str):
+    async def handler(request):
+        raise web.HTTPMovedPermanently(target)
+    return handler
 
 
 async def docs(request):
@@ -45,9 +67,11 @@ def main():
     app = web.Application()
     app.router.add_get("/", index)
     app.router.add_get("/docs.html", docs)
-    app.router.add_get("/invite.html", invite)
-    app.router.add_get("/pricing.html", pricing)
-    app.router.add_get("/commands.html", commands)
+    # หน้าเก่าย้ายไปรวมในหน้าแรกแล้ว — ลิงก์เดิมที่แชร์ไว้ยังพาไปถูกที่
+    app.router.add_get("/index.html", _redirect("/"))
+    app.router.add_get("/invite.html", _redirect("/#invite"))
+    app.router.add_get("/pricing.html", _redirect("/#plans"))
+    app.router.add_get("/commands.html", _redirect("/#commands"))
     app.router.add_get("/terms.html", terms)
     app.router.add_get("/privacy.html", privacy)
     app.router.add_get("/health", health)
