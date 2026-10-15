@@ -1,323 +1,185 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="th">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>วิธีใช้งาน — SOLARLIT OPS</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="คู่มือใช้งานบอท Solarlit: ใจปู ยาม และ Voice Relay พร้อมตัวอย่างคำสั่ง">
+<title>วิธีใช้งาน · Solarlit</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans+Thai:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@500;600;700&family=Noto+Sans+Thai:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap">
 <style>
-  :root{
-    --bg:#0a0e13; --panel:#121920; --panel-2:#0e141a;
-    --line:#233039; --line-soft:#1a232b;
-    --text:#e8edf2; --text-dim:#8fa0ab; --text-faint:#4f6068;
-    --amber:#ff9f1c; --amber-dim:#c97e18; --cyan:#3ed8c3; --cyan-dim:#2a9c8d;
-  }
-  *{box-sizing:border-box; margin:0; padding:0;}
-  body{
-    background:var(--bg); color:var(--text);
-    font-family:'IBM Plex Sans Thai', sans-serif; font-weight:400; line-height:1.7;
-    -webkit-font-smoothing:antialiased;
-  }
-  .mono{font-family:'IBM Plex Mono', monospace;}
-  .wrap{max-width:1000px; margin:0 auto; padding:0 28px;}
-  a{color:inherit; text-decoration:none;}
-
-  nav{
-    position:sticky; top:0; z-index:50; background:rgba(10,14,19,0.85);
-    backdrop-filter:blur(10px); border-bottom:1px solid var(--line-soft);
-  }
-  nav .wrap{max-width:1120px; display:flex; align-items:center; justify-content:space-between; height:64px;}
-  .brand{display:flex; align-items:center; gap:10px; font-family:'IBM Plex Mono', monospace; font-weight:600; font-size:15px; letter-spacing:0.08em;}
-  .brand .dot{width:8px; height:8px; border-radius:50%; background:var(--cyan); box-shadow:0 0 8px var(--cyan);}
-  .nav-links{display:flex; gap:32px; font-size:14px; color:var(--text-dim);}
-  .nav-links a:hover{color:var(--amber);}
-  .nav-links a.active{color:var(--amber);}
-  @media (max-width:760px){ .nav-links{display:none;} }
-
-  header.hero{padding:90px 0 50px; border-bottom:1px solid var(--line-soft);}
-  .eyebrow{
-    font-family:'IBM Plex Mono', monospace; font-size:12.5px; letter-spacing:0.18em;
-    color:var(--cyan); display:flex; align-items:center; gap:10px; margin-bottom:24px;
-  }
-  .eyebrow::before{content:""; width:22px; height:1px; background:var(--cyan);}
-  h1{font-family:'IBM Plex Mono', monospace; font-weight:600; font-size:clamp(28px, 4.6vw, 46px); line-height:1.2; max-width:760px; margin-bottom:20px;}
-  header.hero p.lede{font-size:16px; color:var(--text-dim); max-width:640px; margin-bottom:28px;}
-  .jump{display:flex; gap:10px; flex-wrap:wrap;}
-  .jump a{
-    font-family:'IBM Plex Mono', monospace; font-size:12px; letter-spacing:0.04em;
-    border:1px solid var(--line); padding:8px 14px; border-radius:20px; color:var(--text-dim);
-  }
-  .jump a:hover{border-color:var(--amber-dim); color:var(--amber);}
-
-  .section{padding:64px 0; border-bottom:1px solid var(--line-soft);}
-  .bot-head{display:flex; align-items:baseline; gap:14px; margin-bottom:8px; flex-wrap:wrap;}
-  .bot-head h2{font-family:'IBM Plex Mono', monospace; font-size:clamp(22px,3vw,30px); font-weight:700; color:var(--amber);}
-  .bot-head .tag{
-    font-family:'IBM Plex Mono', monospace; font-size:11px; color:var(--text-faint);
-    letter-spacing:0.1em; border:1px solid var(--line); padding:3px 10px; border-radius:20px;
-  }
-  .bot-desc{color:var(--text-dim); font-size:14.5px; max-width:680px; margin-bottom:12px;}
-  .notice{
-    background:rgba(255,159,28,0.06); border:1px solid var(--amber-dim); border-radius:6px;
-    padding:14px 18px; font-size:13.5px; color:var(--text-dim); margin-bottom:32px; max-width:680px;
-  }
-  .notice b{color:var(--amber);}
-
-  .group-name{
-    font-family:'IBM Plex Mono', monospace; font-size:14px; color:var(--cyan);
-    margin:32px 0 16px; display:flex; align-items:center; gap:10px;
-  }
-  .group-name::before{content:""; width:16px; height:1px; background:var(--cyan-dim);}
-
-  .cmd-card{
-    background:var(--panel); border:1px solid var(--line); border-radius:6px;
-    padding:18px 22px; margin-bottom:12px;
-  }
-  .cmd-row{display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:8px;}
-  .cmd-name{font-family:'IBM Plex Mono', monospace; color:var(--amber); font-size:14.5px; font-weight:600;}
-  .perm-badge{
-    font-family:'IBM Plex Mono', monospace; font-size:10.5px; padding:3px 9px; border-radius:20px; flex-shrink:0;
-  }
-  .perm-badge.admin{color:#ff9f9f; border:1px solid #6b2d2d; background:rgba(255,80,80,0.06);}
-  .perm-badge.all{color:var(--cyan); border:1px solid var(--cyan-dim); background:rgba(62,216,195,0.06);}
-  .cmd-params{
-    font-family:'IBM Plex Mono', monospace; font-size:12.5px; color:var(--text-faint);
-    background:var(--panel-2); border-radius:4px; padding:8px 12px; margin-bottom:10px;
-    display:flex; flex-direction:column; gap:3px;
-  }
-  .cmd-params span b{color:var(--cyan-dim);}
-  .cmd-desc{color:var(--text-dim); font-size:13.5px;}
-  .cmd-warn{color:var(--amber-dim); font-size:12.5px; margin-top:6px;}
-
-  .example{
-    background:var(--panel-2); border:1px solid var(--line); border-radius:6px;
-    padding:20px 22px; margin-top:20px;
-  }
-  .example .ex-label{
-    font-family:'IBM Plex Mono', monospace; font-size:11px; letter-spacing:0.08em;
-    color:var(--text-faint); margin-bottom:12px;
-  }
-  .example code{
-    display:block; font-family:'IBM Plex Mono', monospace; font-size:13px;
-    color:var(--cyan); line-height:1.9; white-space:pre-wrap;
-  }
-  .example .note{color:var(--text-dim); font-size:12.5px; margin-top:10px;}
-
-  footer{padding:60px 0 50px;}
-  .foot-bottom{
-    display:flex; justify-content:space-between; align-items:center; padding-top:32px;
-    border-top:1px solid var(--line-soft); font-size:12.5px; color:var(--text-faint);
-    font-family:'IBM Plex Mono', monospace; flex-wrap:wrap; gap:12px;
-  }
+:root{
+  --bg:#eef1f5; --surface:#ffffff; --sunk:#e3e8ef; --ink:#0f1a2c; --muted:#4d5a6d; --line:#d3dae4;
+  --sun:#b87900; --sun-bright:#f5b301; --sun-soft:#fdf1d2; --sky:#1f5fbf; --sky-soft:#e1ebfa; --ok:#16833f; --warn:#a4460f; --warn-soft:#fbe7da;
+  --display:"Bai Jamjuree",Tahoma,sans-serif; --body:"Noto Sans Thai",Tahoma,sans-serif; --mono:"IBM Plex Mono",ui-monospace,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#0b111c; --surface:#121a28; --sunk:#0e1522; --ink:#e9eef6; --muted:#9aa7ba; --line:#243044;
+  --sun:#f5b301; --sun-bright:#f5b301; --sun-soft:#2a2210; --sky:#7fb0ff; --sky-soft:#152238; --ok:#4fd187; --warn:#ffb38a; --warn-soft:#2c1a10; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0b111c; --surface:#121a28; --sunk:#0e1522; --ink:#e9eef6; --muted:#9aa7ba; --line:#243044;
+  --sun:#f5b301; --sun-bright:#f5b301; --sun-soft:#2a2210; --sky:#7fb0ff; --sky-soft:#152238; --ok:#4fd187; --warn:#ffb38a; --warn-soft:#2c1a10; color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--body);font-size:16px;line-height:1.75;padding-inline:20px}
+a{color:inherit}
+a:focus-visible{outline:3px solid var(--sun-bright);outline-offset:2px;border-radius:4px}
+.wrap{max-width:1100px;margin:0 auto;padding-block:24px 64px;display:flex;flex-direction:column;gap:48px}
+nav{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}
+.brand{display:flex;align-items:center;gap:10px;font-family:var(--display);font-weight:700;font-size:20px;letter-spacing:.02em;text-decoration:none}
+.sunmark{width:30px;height:30px;border-radius:50%;background:radial-gradient(circle at 50% 50%,var(--sun-bright) 0 42%,transparent 43%),repeating-conic-gradient(var(--sun-bright) 0 8deg,transparent 8deg 30deg)}
+.navlinks{display:flex;gap:20px;font-size:15px;color:var(--muted);flex-wrap:wrap}
+.navlinks a{text-decoration:none}.navlinks a:hover,.navlinks a[aria-current]{color:var(--ink)}
+.navlinks a[aria-current]{font-weight:600}
+h1,h2,h3{font-family:var(--display);text-wrap:balance;margin:0}
+.kicker{font-family:var(--mono);font-size:13px;color:var(--sun);letter-spacing:.06em}
+.intro{display:flex;flex-direction:column;gap:10px;max-width:68ch;padding-top:16px}
+.intro h1{font-size:clamp(34px,5.4vw,52px);line-height:1.15}
+.intro p{color:var(--muted);font-size:17px;margin:0}
+.updated{font-size:14px;color:var(--muted)}
+.jump{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
+.jump a{font-size:14px;font-weight:600;padding:7px 14px;border-radius:999px;border:1px solid var(--line);background:var(--surface);text-decoration:none}
+.jump a:hover{border-color:var(--ink)}
+/* เอกสารข้อกฎหมาย */
+.doc{background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:clamp(22px,4vw,40px);max-width:820px;display:flex;flex-direction:column;gap:30px}
+.doc section{display:flex;flex-direction:column;gap:8px}
+.doc h2{font-size:22px;display:flex;gap:10px;align-items:baseline}
+.doc h2 .no{font-family:var(--mono);font-size:14px;color:var(--sun)}
+.doc p{margin:0}
+.doc ul{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
+.doc a{color:var(--sky)}
+.tbl{overflow-x:auto;border:1px solid var(--line);border-radius:12px}
+table{border-collapse:collapse;width:100%;font-size:15px}
+th,td{text-align:left;padding:12px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-family:var(--display);font-size:14px;background:var(--sunk)}
+tr:last-child td{border-bottom:none}
+/* วิธีใช้งาน */
+.unit{display:flex;flex-direction:column;gap:18px;scroll-margin-top:20px}
+.unit-head{display:flex;flex-direction:column;gap:6px;max-width:68ch}
+.unit-head .code{font-family:var(--mono);font-size:12px;color:var(--sun)}
+.unit-head h2{font-size:clamp(28px,4vw,38px)}
+.unit-head p{color:var(--muted);margin:0}
+.group{font-family:var(--display);font-weight:600;font-size:17px;margin-top:8px}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px 18px;display:flex;flex-direction:column;gap:8px}
+.card .top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap}
+.cmd{font-family:var(--mono);font-size:14px;font-weight:500;color:var(--ink)}
+.badge{font-size:12px;font-weight:600;padding:2px 10px;border-radius:999px;background:var(--sun-soft);color:var(--sun);white-space:nowrap}
+.badge.all{background:var(--sky-soft);color:var(--sky)}
+.params{display:flex;gap:6px;flex-wrap:wrap}
+.params span{font-family:var(--mono);font-size:12px;background:var(--sunk);border-radius:6px;padding:2px 8px;color:var(--muted)}
+.params b{color:var(--ink);font-weight:500}
+.card p{margin:0;font-size:15px;color:var(--muted)}
+.card .warn{font-size:14px;color:var(--warn)}
+.example{background:var(--sunk);border:1px solid var(--line);border-left:4px solid var(--sun-bright);border-radius:12px;padding:16px 18px;display:flex;flex-direction:column;gap:10px}
+.example .label{font-family:var(--mono);font-size:12px;color:var(--sun)}
+.example pre{margin:0;font-family:var(--mono);font-size:14px;line-height:1.8;white-space:pre-wrap;word-break:break-word}
+.example p{margin:0;font-size:14px;color:var(--muted)}
+.notice{background:var(--warn-soft);color:var(--ink);border-radius:12px;padding:14px 18px;font-size:15px}
+.notice b{color:var(--warn)}
+hr{border:none;border-top:1px solid var(--line);margin:0}
+footer{border-top:1px solid var(--line);padding-top:24px;color:var(--muted);font-size:14px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px}
+.flinks{display:flex;gap:16px;flex-wrap:wrap}.flinks a{text-decoration:none}.flinks a:hover,.flinks a[aria-current]{color:var(--ink)}
+@media (max-width:640px){.navlinks{gap:14px;font-size:14px}.cards{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
+<div class="wrap">
+  <nav>
+    <a class="brand" href="/"><span class="sunmark" aria-hidden="true"></span>Solarlit</a>
+    <div class="navlinks"><a href="/#units">หน่วยบอท</a><a href="/#commands">คำสั่ง</a><a href="docs.html" aria-current="page">วิธีใช้งาน</a><a href="/#plans">แพ็กเกจ</a><a href="/#invite">เชิญบอท</a><a href="/#contact">ติดต่อ</a></div>
+  </nav>
 
-<nav>
-  <div class="wrap">
-    <div class="brand"><span class="dot"></span>SOLARLIT&nbsp;OPS</div>
-    <div class="nav-links">
-      <a href="/#units">หน่วยบอท</a>
-      <a href="/#plans">ราคา</a>
-      <a href="/#commands">คำสั่งทั้งหมด</a>
-      <a href="docs.html" class="active">วิธีใช้งาน</a>
-      <a href="/#invite">เชิญบอท</a>
-      <a href="/#contact">ติดต่อ</a>
-    </div>
-  </div>
-</nav>
-
-<header class="hero">
-  <div class="wrap">
-    <div class="eyebrow">DOCUMENTATION // HOW TO USE</div>
+  <header class="intro">
+    <span class="kicker">คู่มือ</span>
     <h1>วิธีใช้งานบอททั้งหมด</h1>
-    <p class="lede">คำสั่งสำคัญของทั้ง 3 หน่วยบอท พร้อมตัวอย่างการใช้งานจริง — คัดลอกคำสั่งไปวางใน Discord ได้เลย (ดูคำสั่งครบทั้งหมด 90 คำสั่งที่หน้า <a href="/#commands" style="color:var(--cyan);">คำสั่งทั้งหมด</a>)</p>
-    <div class="jump">
-      <a href="#jaipu">ใจปู</a>
-      <a href="#yarm">ยาม</a>
-      <a href="#relay">Voice Relay</a>
-    </div>
-  </div>
-</header>
+    <p>คำสั่งสำคัญของทั้ง 3 หน่วยบอท พร้อมตัวอย่างที่คัดลอกไปวางในดิสคอร์ดได้เลย ดูคำสั่งครบทุกตัวได้ที่ <a href="/#commands">รายการคำสั่ง</a></p>
+    <div class="jump"><a href="#jaipu">ใจปู</a><a href="#yarm">ยาม</a><a href="#relay">Voice Relay</a></div>
+  </header>
 
-<section class="section" id="jaipu">
-  <div class="wrap">
-    <div class="bot-head"><h2>ใจปู</h2><span class="tag">UNIT-01 · QUEUE / MOD</span></div>
-    <p class="bot-desc">ระบบคิวเข้าห้อง จองคิวล่วงหน้า แยกห้องประชุมกลุ่มย่อยอัตโนมัติ และเครื่องมือ moderation ครบชุดสำหรับดูแลเซิร์ฟเวอร์</p>
-
-    <div class="group-name">/queue — ระบบคิว</div>
-    <div class="cmd-card">
-      <div class="cmd-row"><span class="cmd-name">/queue join</span></div>
-      <div class="cmd-desc">เข้าคิว ระบบจะบอกตำแหน่งคิวของคุณทันที</div>
+  <section class="unit" id="jaipu">
+    <div class="unit-head"><span class="code">หน่วย 01 · คิว / ดูแลเซิร์ฟ</span><h2>ใจปู</h2>
+      <p>ระบบคิวเข้าห้อง จองคิวล่วงหน้า แบ่งห้องกลุ่มย่อยอัตโนมัติ และเครื่องมือดูแลเซิร์ฟเวอร์ครบชุด</p></div>
+    <h3 class="group">/queue — ระบบคิว</h3>
+    <div class="cards">
+      <div class="card"><div class="top"><span class="cmd">/queue join</span><span class="badge all">ทุกคน</span></div><p>เข้าคิว บอทบอกลำดับคิวของคุณทันที</p></div>
+      <div class="card"><div class="top"><span class="cmd">/queue book</span><span class="badge all">ทุกคน</span></div><div class="params"><span><b>date:</b> 2026-08-20</span><span><b>time:</b> 14:30</span></div><p>จองคิวล่วงหน้า บอท DM เตือนก่อนถึงเวลา 10 นาที และใส่เข้าคิวให้อัตโนมัติ</p><p class="warn">ต้องเปิดรับ DM จากสมาชิกเซิร์ฟเวอร์ไว้ ไม่งั้นจะไม่ได้รับการเตือน</p></div>
+      <div class="card"><div class="top"><span class="cmd">/queue board</span><span class="badge">แอดมิน</span></div><p>โพสต์กระดานคิวสดในห้องที่พิมพ์ — แต่ละห้องมีคิวแยกของตัวเอง มีปุ่มเข้า/ออกคิว เรียก จบ รีเฟรช ในข้อความเดียว</p></div>
     </div>
-    <div class="cmd-card">
-      <div class="cmd-row"><span class="cmd-name">/queue book</span></div>
-      <div class="cmd-params"><span><b>date:</b> 2026-08-20</span><span><b>time:</b> 14:30</span></div>
-      <div class="cmd-desc">จองคิวล่วงหน้า ระบบจะ DM แจ้งเตือนก่อนถึงเวลา 10 นาที และเพิ่มเข้าคิวให้อัตโนมัติ</div>
-      <div class="cmd-warn">⚠ ต้องเปิดรับ DM จากสมาชิกเซิร์ฟเวอร์ไว้ ไม่งั้นจะไม่ได้รับการแจ้งเตือน</div>
+    <h3 class="group">/breakout — ห้องกลุ่มย่อย</h3>
+    <div class="cards">
+      <div class="card"><div class="top"><span class="cmd">/breakout start</span><span class="badge">แอดมิน</span></div><div class="params"><span><b>source:</b> ห้องหลัก</span><span><b>rooms:</b> 3</span></div><p>สุ่มแบ่งคนในห้องหลักเป็นห้องย่อย 2–10 ห้อง สร้างห้องและย้ายคนให้อัตโนมัติ</p></div>
+      <div class="card"><div class="top"><span class="cmd">/breakout setowner</span><span class="badge">แอดมิน</span></div><div class="params"><span><b>member:</b> @ชื่อ</span><span><b>room:</b> 1</span></div><p>ตั้งหัวหน้าห้องย่อย ได้สิทธิ์พูดในห้องใหญ่คืนอัตโนมัติตอนดึงกลับ</p></div>
+      <div class="card"><div class="top"><span class="cmd">/breakout setspeakers</span><span class="badge">แอดมิน</span></div><div class="params"><span><b>channel:</b> ห้องหลัก</span><span><b>role:</b> @วิทยากร</span></div><p>ให้เฉพาะยศที่เลือกพูดได้ คนอื่นฟังอย่างเดียว</p></div>
+      <div class="card"><div class="top"><span class="cmd">/breakout recall</span><span class="badge">แอดมิน</span></div><p>ดึงทุกคนกลับห้องหลัก แล้วลบห้องย่อยทิ้งให้</p></div>
     </div>
-    <div class="cmd-card">
-      <div class="cmd-row"><span class="cmd-name">/queue board</span> <span class="perm-badge admin">แอดมิน</span></div>
-      <div class="cmd-desc">โพสต์กระดานคิวสด รวมปุ่มเข้า/ออกคิว + เรียก/จบ/รีเฟรช ในข้อความเดียว อัปเดตแบบเรียลไทม์</div>
-    </div>
-
-    <div class="group-name">/breakout — ห้องประชุมกลุ่มย่อย</div>
-    <div class="cmd-card">
-      <div class="cmd-row"><span class="cmd-name">/breakout start</span> <span class="perm-badge admin">แอดมิน</span></div>
-      <div class="cmd-params"><span><b>source:</b> ห้องหลัก</span><span><b>rooms:</b> 3</span></div>
-      <div class="cmd-desc">สุ่มแบ่งคนในห้องหลักออกเป็นห้องย่อยตามจำนวนที่ระบุ (2-10 ห้อง) สร้างห้องและย้ายคนให้อัตโนมัติ</div>
-    </div>
-    <div class="cmd-card">
-      <div class="cmd-row"><span class="cmd-name">/breakout setowner</span> <span class="perm-badge admin">แอดมิน</span></div>
-      <div class="cmd-params"><span><b>member:</b> @ชื่อ</span><span><b>room:</b> 1</span></div>
-      <div class="cmd-desc">กำหนดหัวหน้าห้องย่อย — จะได้สิทธิ์พูดคืนในห้องใหญ่อัตโนมัติตอน recall</div>
-    </div>
-    <div class="cmd-card">
-      <div class="cmd-row"><span class="cmd-name">/breakout setspeakers</span> <span class="perm-badge admin">แอดมิน</span></div>
-      <div class="cmd-params"><span><b>channel:</b> ห้องหลัก</span><span><b>role:</b> @วิทยากร</span></div>
-      <div class="cmd-desc">ตั้งค่าห้อง: เฉพาะบทบาทที่ระบุพูดได้ คนอื่นเข้าฟังอย่างเดียว</div>
-    </div>
-    <div class="cmd-card">
-      <div class="cmd-row"><span class="cmd-name">/breakout recall</span> <span class="perm-badge admin">แอดมิน</span></div>
-      <div class="cmd-desc">ดึงทุกคนกลับห้องหลัก ลบห้องย่อยทิ้งอัตโนมัติ</div>
-    </div>
-
-    <div class="example">
-      <div class="ex-label mono">EXAMPLE // เริ่มกิจกรรมกลุ่มย่อยแบบเต็ม</div>
-      <code>/breakout setspeakers channel:ห้องประชุมใหญ่ role:@วิทยากร
+    <div class="example"><span class="label">ตัวอย่าง · กิจกรรมกลุ่มย่อยครบวงจร</span><pre>/breakout setspeakers channel:ห้องประชุมใหญ่ role:@วิทยากร
 /breakout start source:ห้องประชุมใหญ่ rooms:4
 /breakout setowner member:@สมชาย room:1
-/breakout recall</code>
+/breakout recall</pre></div>
+    <h3 class="group">/mod, /automod, /welcome — ดูแลเซิร์ฟ</h3>
+    <div class="cards">
+      <div class="card"><div class="top"><span class="cmd">/mod kick · ban · timeout</span><span class="badge">แอดมิน</span></div><p>เตะ แบน หรือพักการพิมพ์สมาชิก พร้อมระบุเหตุผล</p></div>
+      <div class="card"><div class="top"><span class="cmd">/automod toggle · addword · removeword</span><span class="badge">แอดมิน</span></div><p>เปิด/ปิดกรองคำอัตโนมัติ และจัดการรายการคำต้องห้าม</p></div>
+      <div class="card"><div class="top"><span class="cmd">/welcome channel · message</span><span class="badge">แอดมิน</span></div><p>ตั้งห้องและข้อความต้อนรับสมาชิกใหม่</p></div>
     </div>
+  </section>
 
-    <div class="group-name">/mod, /automod, /welcome — Moderation</div>
-    <div class="cmd-card">
-      <div class="cmd-row"><span class="cmd-name">/mod kick, ban, timeout</span> <span class="perm-badge admin">แอดมิน</span></div>
-      <div class="cmd-desc">เตะ/แบน/timeout สมาชิก พร้อมระบุเหตุผล</div>
-    </div>
-    <div class="cmd-card">
-      <div class="cmd-row"><span class="cmd-name">/automod toggle, addword, removeword</span> <span class="perm-badge admin">แอดมิน</span></div>
-      <div class="cmd-desc">เปิด/ปิดระบบกรองคำอัตโนมัติ และจัดการรายการคำต้องห้าม</div>
-    </div>
-    <div class="cmd-card">
-      <div class="cmd-row"><span class="cmd-name">/welcome channel, message</span> <span class="perm-badge admin">แอดมิน</span></div>
-      <div class="cmd-desc">ตั้งช่องและข้อความต้อนรับสมาชิกใหม่ — ตั้งได้ผ่าน dashboard ด้วย</div>
-    </div>
-  </div>
-</section>
+  <hr>
 
-<section class="section" id="yarm">
-  <div class="wrap">
-    <div class="bot-head"><h2>ยาม</h2><span class="tag">UNIT-02 · SURVEILLANCE</span></div>
-    <p class="bot-desc">ติดตามว่าใครเข้าห้องเสียงไหน อยู่นานเท่าไหร่ นับจำนวนคนออนไลน์แบบเรียลไทม์ และส่งออกข้อมูลเป็นรายงาน</p>
-
-    <div class="group-name">/track — จัดการห้องที่ติดตาม</div>
-    <div class="cmd-card">
-      <div class="cmd-row"><span class="cmd-name">/track add</span> <span class="perm-badge admin">แอดมิน</span></div>
-      <div class="cmd-params"><span><b>channel:</b> ห้องเสียง</span></div>
-      <div class="cmd-desc">เริ่มติดตามห้องเสียง — ต้องทำก่อนถึงจะใช้คำสั่งอื่นในห้องนั้นได้</div>
+  <section class="unit" id="yarm">
+    <div class="unit-head"><span class="code">หน่วย 02 · ติดตามห้องเสียง</span><h2>ยาม</h2>
+      <p>ดูว่าใครเข้าห้องเสียงไหน อยู่นานเท่าไหร่ นับคนออนไลน์สดๆ และส่งออกเป็นรายงาน</p></div>
+    <h3 class="group">/track — ห้องที่ติดตาม</h3>
+    <div class="cards">
+      <div class="card"><div class="top"><span class="cmd">/track add</span><span class="badge">แอดมิน</span></div><div class="params"><span><b>channel:</b> ห้องเสียง</span></div><p>เริ่มติดตามห้องเสียง ต้องทำก่อนจึงจะใช้คำสั่งอื่นกับห้องนั้นได้</p></div>
     </div>
-
-    <div class="group-name">/voice — ดูข้อมูลและสถิติ</div>
-    <div class="cmd-card">
-      <div class="cmd-row"><span class="cmd-name">/voice now</span></div>
-      <div class="cmd-params"><span><b>channel:</b> ห้องเสียง</span></div>
-      <div class="cmd-desc">ดูว่าใครอยู่ในห้องตอนนี้ + อยู่มานานเท่าไหร่ + จำนวนคนออนไลน์</div>
+    <h3 class="group">/voice — ข้อมูลและสถิติ</h3>
+    <div class="cards">
+      <div class="card"><div class="top"><span class="cmd">/voice now</span><span class="badge all">ทุกคน</span></div><div class="params"><span><b>channel:</b> ห้องเสียง</span></div><p>ใครอยู่ในห้องตอนนี้ อยู่มานานเท่าไหร่ และจำนวนคนออนไลน์</p></div>
+      <div class="card"><div class="top"><span class="cmd">/voice stats</span><span class="badge all">ทุกคน</span></div><div class="params"><span><b>channel:</b> ห้องเสียง</span><span><b>days:</b> 7</span></div><p>สรุปเวลารวมของแต่ละคน เลือกช่วงวันได้ (0 = ทั้งหมด)</p></div>
+      <div class="card"><div class="top"><span class="cmd">/voice export</span><span class="badge all">ทุกคน</span></div><div class="params"><span><b>channel:</b> ห้องเสียง</span><span><b>days:</b> 30</span></div><p>ส่งออกเป็นไฟล์ CSV เปิดด้วย Excel ได้ทันที รองรับภาษาไทย</p></div>
+      <div class="card"><div class="top"><span class="cmd">/voice graph</span><span class="badge all">ทุกคน</span></div><div class="params"><span><b>channel:</b> ห้องเสียง</span><span><b>days:</b> 14</span></div><p>กราฟกิจกรรมเป็นรูปภาพ (นาทีรวมต่อวัน)</p></div>
     </div>
-    <div class="cmd-card">
-      <div class="cmd-row"><span class="cmd-name">/voice stats</span></div>
-      <div class="cmd-params"><span><b>channel:</b> ห้องเสียง</span><span><b>days:</b> 7</span></div>
-      <div class="cmd-desc">สรุปเวลารวมของแต่ละคนในห้อง เลือกช่วงวันได้ (0 = ทั้งหมด)</div>
-    </div>
-    <div class="cmd-card">
-      <div class="cmd-row"><span class="cmd-name">/voice export</span></div>
-      <div class="cmd-params"><span><b>channel:</b> ห้องเสียง</span><span><b>days:</b> 30</span></div>
-      <div class="cmd-desc">ส่งออกข้อมูลเป็นไฟล์ CSV เปิดด้วย Excel ได้ทันที (รองรับภาษาไทย)</div>
-    </div>
-    <div class="cmd-card">
-      <div class="cmd-row"><span class="cmd-name">/voice graph</span></div>
-      <div class="cmd-params"><span><b>channel:</b> ห้องเสียง</span><span><b>days:</b> 14</span></div>
-      <div class="cmd-desc">ดูกราฟกิจกรรม (นาทีรวมต่อวัน) เป็นรูปภาพ</div>
-    </div>
-
-    <div class="example">
-      <div class="ex-label mono">EXAMPLE // เริ่มติดตามและดูสถิติ</div>
-      <code>/track add channel:ห้องประชุมทีม
+    <div class="example"><span class="label">ตัวอย่าง · เริ่มติดตามและดูสถิติ</span><pre>/track add channel:ห้องประชุมทีม
 /voice now channel:ห้องประชุมทีม
 /voice stats channel:ห้องประชุมทีม days:7
-/voice export channel:ห้องประชุมทีม days:30</code>
+/voice export channel:ห้องประชุมทีม days:30</pre></div>
+    <h3 class="group">แนะนำตัวสมาชิก / จัดปาร์ตี้</h3>
+    <div class="cards">
+      <div class="card"><div class="top"><span class="cmd">/setup-introduction · /setup-playerboard</span><span class="badge">แอดมิน</span></div><p>ตั้งกระดานแนะนำตัวและรายชื่อสมาชิกแบบรูปภาพ สมาชิกจัดการโปรไฟล์ด้วย /my-profile และ /edit-profile</p></div>
+      <div class="card"><div class="top"><span class="cmd">/party upload · /party generate</span><span class="badge">แอดมิน</span></div><p>แนบรูปตารางปาร์ตี้ (SUN/MOON/DARK/FLASH) ให้บอทจัดโพยตามรูป หรือสร้างโพยจากรายชื่อผู้เล่นอัตโนมัติ</p></div>
     </div>
+  </section>
 
-    <div class="group-name">ระบบแนะนำตัวสมาชิก / จัดปาร์ตี้</div>
-    <div class="cmd-card">
-      <div class="cmd-row"><span class="cmd-name">/setup-introduction, /setup-playerboard</span> <span class="perm-badge admin">แอดมิน</span></div>
-      <div class="cmd-desc">ตั้งค่ากระดานแนะนำตัว/รายชื่อสมาชิกแบบรูปภาพในห้องที่เลือก — สมาชิกใช้ /my-profile และ /edit-profile จัดการโปรไฟล์ตัวเอง</div>
-    </div>
-    <div class="cmd-card">
-      <div class="cmd-row"><span class="cmd-name">/party upload, /party generate</span> <span class="perm-badge admin">แอดมิน</span></div>
-      <div class="cmd-desc">แนบรูปตารางปาร์ตี้ (SUN/MOON/DARK/FLASH) ให้บอทจัดโพยตามรูป หรือสร้างโพยอัตโนมัติจากรายชื่อผู้เล่นถ้าไม่มีรูป</div>
-    </div>
-  </div>
-</section>
+  <hr>
 
-<section class="section" id="relay" style="border-bottom:none;">
-  <div class="wrap">
-    <div class="bot-head"><h2>Voice Relay</h2><span class="tag">UNIT-03 · LIVE RELAY</span></div>
-    <p class="bot-desc">ถ่ายทอดเสียงสดจากห้องบัญชาการ ไปยังห้องย่อยหลายห้องพร้อมกันแบบเรียลไทม์ — ควบคุมผ่านคำสั่งของบอท "หัวหน้า" เท่านั้น (บอทลูกน้องไม่มีคำสั่งของตัวเอง)</p>
-    <div class="notice"><b>ข้อจำกัดสำคัญ:</b> ห้องหลักควรเป็น Stage Channel ไม่ใช่ Voice Channel ธรรมดา เพราะ Discord บังคับเข้ารหัสเสียงแบบ E2EE (DAVE) กับ Voice Channel ทำให้บอทฟังเสียงไม่ได้ — Stage Channel ได้รับการยกเว้น</div>
+  <section class="unit" id="relay">
+    <div class="unit-head"><span class="code">หน่วย 03 · ถ่ายทอดเสียงสด</span><h2>Voice Relay</h2>
+      <p>บอทหัวหน้าฟังเสียงในห้องสั่งการ แล้วส่งต่อให้บอทลูกน้องที่อยู่ห้องย่อยหลายห้องพร้อมกันแบบสด สั่งงานผ่านคำสั่งของบอทหัวหน้าเท่านั้น</p></div>
+    <div class="notice"><b>ข้อควรรู้:</b> ห้องหลักแนะนำให้ใช้ Stage Channel เพราะดิสคอร์ดเข้ารหัสเสียงห้อง Voice ธรรมดา (DAVE) ทำให้บอทฟังไม่ได้ในบางกรณี</div>
+    <h3 class="group">เปิดใช้งาน</h3>
+    <div class="cards">
+      <div class="card"><div class="top"><span class="cmd">/pay</span><span class="badge">แอดมิน</span></div><div class="params"><span><b>slip:</b> รูปสลิป</span><span><b>speakers:</b> 5</span><span><b>listeners:</b> 1</span></div><p>แนบสลิปพร้อมเพย์ ใช้ได้ทันทีชั่วคราว 7 วันระหว่างรอแอดมินตรวจ ตรวจผ่านแล้วได้ 30 วันเต็ม แจ้งผลทาง DM</p></div>
+      <div class="card"><div class="top"><span class="cmd">/relay name</span><span class="badge">แอดมิน</span></div><div class="params"><span><b>head:</b> ผู้บัญชาการ</span><span><b>speakers:</b> ห้องทีม</span></div><p>ตั้งชื่อบอทในเซิร์ฟเรา หัวหน้าตั้งชื่อตรงๆ ส่วนลูกน้องใส่ชื่อนำหน้าแล้วบอทเติมเลขให้ พิมพ์ - เพื่อคืนชื่อเดิม</p></div>
+    </div>
+    <h3 class="group">ตั้งอัตโนมัติ (แนะนำ)</h3>
+    <div class="cards">
+      <div class="card"><div class="top"><span class="cmd">/relay go</span><span class="badge">แอดมิน</span></div><div class="params"><span><b>source:</b> ห้องสั่งการ</span><span><b>room1:</b> ห้องทีม 1</span><span><b>room2:</b> …</span></div><p>ตั้งครั้งเดียว: หัวหน้าเข้าห้องหลักเมื่อมีคนเข้า ลูกน้องเข้าห้องย่อยเมื่อมีคน ห้องว่างแล้วออกเอง สูงสุด 20 ห้อง</p></div>
+      <div class="card"><div class="top"><span class="cmd">/relay status</span><span class="badge all">ทุกคน</span></div><p>ดูว่าตอนนี้ถ่ายทอดห้องไหนอยู่ ใช้ลูกน้องตัวไหน</p></div>
+      <div class="card"><div class="top"><span class="cmd">/relay unbind</span><span class="badge">แอดมิน</span></div><p>ยกเลิกการตั้งอัตโนมัติทั้งหมด</p></div>
+    </div>
+    <div class="example"><span class="label">ตัวอย่าง · ตั้งครั้งเดียวใช้ได้ทั้งวัน</span><pre>/relay name head:ผู้บัญชาการ speakers:ห้องทีม
+/relay go source:ห้องสั่งการ room1:ทีม-1 room2:ทีม-2 room3:ทีม-3</pre><p>หลังจากนี้ไม่ต้องพิมพ์อะไรอีก แค่เข้าห้องตามปกติ บอทตามเข้า-ออกให้เอง</p><p>ถ้าบอทรีสตาร์ท (เช่นตอนอัปเดตระบบ) ต้องพิมพ์ /relay go ใหม่อีกครั้ง</p></div>
+    <h3 class="group">สั่งเองทีละขั้น</h3>
+    <div class="cards">
+      <div class="card"><div class="top"><span class="cmd">/relay start</span><span class="badge">แอดมิน</span></div><div class="params"><span><b>source:</b> ห้องสั่งการ</span></div><p>เริ่มฟังห้องหลัก (ยังไม่ส่งเสียงไปไหนจนกว่าจะเพิ่มห้องย่อย)</p></div>
+      <div class="card"><div class="top"><span class="cmd">/relay addtarget</span><span class="badge">แอดมิน</span></div><div class="params"><span><b>channel:</b> ห้องย่อย</span></div><p>เพิ่มห้องย่อย ใช้ลูกน้องตัวถัดไปที่ว่าง</p></div>
+      <div class="card"><div class="top"><span class="cmd">/relay setrole</span><span class="badge">แอดมิน</span></div><div class="params"><span><b>role:</b> @หัวหน้ากิลด์</span></div><p>ส่งต่อเฉพาะเสียงของยศที่เลือก เช่นเฉพาะหัวหน้ากิลด์</p></div>
+      <div class="card"><div class="top"><span class="cmd">/relay stop</span><span class="badge">แอดมิน</span></div><p>หยุดถ่ายทอดทุกห้องของหัวหน้าตัวนี้</p></div>
+    </div>
+  </section>
 
-    <div class="group-name">คำสั่งพื้นฐาน — เริ่มใช้งานด้วยมือ</div>
-    <div class="cmd-card">
-      <div class="cmd-row"><span class="cmd-name">/relay start</span> <span class="perm-badge admin">แอดมิน</span></div>
-      <div class="cmd-params"><span><b>source:</b> ห้องบัญชาการ</span></div>
-      <div class="cmd-desc">เริ่มฟังเสียงจากห้องหลัก (ยังไม่กระจายไปไหนจนกว่าจะเพิ่มปลายทาง)</div>
-    </div>
-    <div class="cmd-card">
-      <div class="cmd-row"><span class="cmd-name">/relay addtarget</span> <span class="perm-badge admin">แอดมิน</span></div>
-      <div class="cmd-params"><span><b>channel:</b> ห้องย่อย</span></div>
-      <div class="cmd-desc">เพิ่มห้องย่อยที่จะกระจายเสียงไป ใช้บอทลูกน้องตัวถัดไปที่ว่าง (ได้หลายห้องเท่าจำนวนบอทลูกน้องที่เปิดใช้)</div>
-    </div>
-    <div class="cmd-card">
-      <div class="cmd-row"><span class="cmd-name">/relay status</span> <span class="perm-badge all">ทุกคน</span></div>
-      <div class="cmd-desc">เช็คสถานะปัจจุบัน — ห้องไหนกำลังถ่ายทอดอยู่ ใช้บอทลูกน้องตัวที่เท่าไหร่</div>
-    </div>
-
-    <div class="group-name">ผูกอัตโนมัติ — ไม่ต้องพิมพ์คำสั่งซ้ำทุกครั้ง</div>
-    <div class="cmd-card">
-      <div class="cmd-row"><span class="cmd-name">/relay bindlistener</span> <span class="perm-badge admin">แอดมิน</span></div>
-      <div class="cmd-params"><span><b>channel:</b> ห้องบัญชาการ</span></div>
-      <div class="cmd-desc">ผูกบอทฟังกับห้องหลัก — มีคนแรกเข้าห้องนี้ บอทเข้าอัตโนมัติ / ห้องว่าง บอทออกอัตโนมัติ</div>
-    </div>
-    <div class="cmd-card">
-      <div class="cmd-row"><span class="cmd-name">/relay bindspeakers</span> <span class="perm-badge admin">แอดมิน</span></div>
-      <div class="cmd-desc">ผูกบอทลูกน้องสูงสุด 5 ตัวพร้อมกันในคำสั่งเดียว (เลือกตัวว่างให้อัตโนมัติ) — หรือใช้ /relay bindspeaker ระบุหมายเลขเอง</div>
-    </div>
-    <div class="cmd-card">
-      <div class="cmd-row"><span class="cmd-name">/relay unbind</span> <span class="perm-badge admin">แอดมิน</span></div>
-      <div class="cmd-desc">ยกเลิกการผูกอัตโนมัติทั้งหมด (ยังใช้คำสั่ง manual ได้ปกติ)</div>
-    </div>
-
-    <div class="example">
-      <div class="ex-label mono">EXAMPLE // ตั้งค่าครั้งเดียว ใช้ตลอดไป (แนะนำ)</div>
-      <code>/relay bindlistener channel:ห้องบัญชาการ
-/relay bindspeaker index:1 channel:ห้องลูกทีม1
-/relay bindspeaker index:2 channel:ห้องลูกทีม2
-/relay bindspeaker index:3 channel:ห้องลูกทีม3</code>
-      <div class="note">จากนั้นไม่ต้องพิมพ์คำสั่งอะไรอีกเลย แค่เข้าห้องตามปกติ บอทจะตามเข้า-ออกให้เอง</div>
-      <div class="note">หมายเหตุ: ค่าที่ผูกไว้เก็บในหน่วยความจำเท่านั้น หากบอทรีสตาร์ท ต้องตั้งค่าผูกใหม่อีกครั้ง</div>
-    </div>
-  </div>
-</section>
-
-<footer>
-  <div class="wrap">
-    <div class="foot-bottom">
-      <div>SOLARLIT OPS — DOCUMENTATION © 2026</div>
-      <div><a href="/#commands">ดูคำสั่งครบทั้งหมด →</a></div>
-    </div>
-  </div>
-</footer>
-
+  <footer><span>Solarlit © 2026</span><span class="flinks"><a href="docs.html" aria-current="page">วิธีใช้งาน</a><a href="terms.html">ข้อกำหนดการใช้งาน</a><a href="privacy.html">นโยบายความเป็นส่วนตัว</a></span></footer>
+</div>
 </body>
 </html>

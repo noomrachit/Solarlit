@@ -11,7 +11,8 @@
 - เซิร์ฟเวอร์ใน EXEMPT_GUILD_IDS ใช้ฟรีถาวร ไม่จำกัด
 - ยังไม่ได้ตั้ง BILLING_DATABASE_URL = ปล่อยผ่านทุกเซิร์ฟเวอร์ (เหมือนก่อนมีระบบนี้)
   เพื่อไม่ให้บอทพังทันทีที่ deploy ก่อนต่อฐานข้อมูล
-- ต่อฐานข้อมูลแล้วแต่ต่อไม่ติด = ปล่อยผ่านชั่วคราว (fail-open) แล้ว log ไว้
+- ตั้งฐานข้อมูลแล้วแต่ต่อไม่ติด = ใช้ผลล่าสุดที่จำไว้ ถ้าไม่เคยมีก็ปิดไว้ก่อน (fail-closed)
+  กันไม่ให้ฐานข้อมูลล่มแล้วทุกเซิร์ฟได้ใช้ฟรี
 - คิดราคา: ตัวละ 10 บาท/เดือน ทั้งหัวหน้าและลูกน้อง
 """
 import logging
@@ -122,7 +123,7 @@ async def _get_pool() -> Optional[asyncpg.Pool]:
             )
         log.info("เชื่อมฐานข้อมูลสิทธิ์ Voice Relay สำเร็จ")
     except Exception:
-        log.exception("เชื่อม BILLING_DATABASE_URL ไม่สำเร็จ — ปล่อยผ่านชั่วคราว (จะลองใหม่ในรอบถัดไป)")
+        log.exception("เชื่อม BILLING_DATABASE_URL ไม่สำเร็จ — ใช้สิทธิ์ที่จำไว้ล่าสุด (จะลองใหม่ในรอบถัดไป)")
         _pool = None
         _pool_tried = False
     return _pool
@@ -132,6 +133,15 @@ def invalidate(guild_id: int) -> None:
     _cache.pop(guild_id, None)
 
 
+def _stale(guild_id: int) -> Optional[Access]:
+    """ฐานข้อมูลต่อไม่ได้: ใช้สิทธิ์ที่อ่านได้ครั้งล่าสุด (ถ้ายังไม่หมดอายุ) ไม่งั้นปิดไว้ก่อน"""
+    hit = _cache.get(guild_id)
+    acc = hit[1] if hit else None
+    if acc and acc.paid_until and acc.paid_until > datetime.now(acc.paid_until.tzinfo):
+        return acc
+    return None
+
+
 async def get_access(guild_id: int) -> Optional[Access]:
     """คืนสิทธิ์ของเซิร์ฟเวอร์นี้ หรือ None ถ้ายังไม่ได้จ่าย/หมดอายุ"""
     if guild_id in EXEMPT_GUILD_IDS:
@@ -139,17 +149,19 @@ async def get_access(guild_id: int) -> Optional[Access]:
     hit = _cache.get(guild_id)
     if hit and time.monotonic() - hit[0] < _CACHE_TTL:
         return hit[1]
+    if not is_enabled():
+        return UNLIMITED
     pool = await _get_pool()
     if pool is None:
-        return UNLIMITED
+        return _stale(guild_id)
     try:
         row = await pool.fetchrow(
             "SELECT listeners, speakers, paid_until FROM relay_access WHERE guild_id = $1 AND paid_until > now()",
             guild_id,
         )
     except Exception:
-        log.exception("อ่านสิทธิ์ไม่สำเร็จ — ปล่อยผ่านชั่วคราว")
-        return UNLIMITED
+        log.exception("อ่านสิทธิ์ไม่สำเร็จ — ใช้ผลล่าสุดที่จำไว้")
+        return _stale(guild_id)
     result = Access(row["listeners"], row["speakers"], row["paid_until"]) if row else None
     _cache[guild_id] = (time.monotonic(), result)
     return result
