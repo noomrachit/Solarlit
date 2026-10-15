@@ -40,6 +40,7 @@ import time
 import functools
 from collections import defaultdict
 from contextlib import AsyncExitStack
+from io import BytesIO
 from datetime import timedelta, timezone
 from typing import Optional, Union
 
@@ -53,6 +54,7 @@ from dotenv import load_dotenv
 from aiohttp import web
 
 import access
+import slip_verify
 
 load_dotenv()
 
@@ -398,13 +400,13 @@ class RelayUnit:
 
     async def _access_check(self, interaction: discord.Interaction) -> bool:
         cmd = interaction.command.qualified_name if interaction.command else ""
-        if cmd.startswith("admin") or not interaction.guild:
+        if cmd.startswith(("admin", "pay")) or not interaction.guild:
             return True
         acc = await access.get_access(interaction.guild.id)
         msg = None
         if acc is None:
             msg = ("🔒 เซิร์ฟเวอร์นี้ยังไม่ได้เปิดใช้ Voice Relay หรือหมดอายุแล้ว\n"
-                   f"ราคาตัวละ 10 บาท/เดือน เริ่ม 60 บาท จ่ายผ่านพร้อมเพย์แล้วส่งสลิปให้แอดมิน: {WEBSITE_URL}/#plans\n"
+                   f"ราคาตัวละ 10 บาท/เดือน เริ่ม 60 บาท โอนพร้อมเพย์แล้วส่งสลิปด้วย `/pay` ระบบเปิดให้ทันที: {WEBSITE_URL}/#plans\n"
                    f"แจ้งเลขเซิร์ฟเวอร์นี้ให้แอดมินด้วย: `{interaction.guild.id}`")
         elif self.unit_no > acc.listeners:
             msg = f"🔒 แพ็กเกจของเซิร์ฟเวอร์นี้ใช้หัวหน้าได้ {acc.listeners} ตัว — ใช้คำสั่งของหัวหน้าตัวแรกแทน หรือซื้อหัวหน้าเพิ่ม"
@@ -951,6 +953,64 @@ class RelayUnit:
             await interaction.response.send_message("\n".join(lines)[:1900], ephemeral=True)
 
         self.tree.add_command(admin_group)
+
+        unit = self
+        pool = self.pool
+
+        async def _notify_admins(text: str, image: Optional[bytes] = None, filename: str = "slip.jpg"):
+            for uid in access.ADMIN_USER_IDS:
+                try:
+                    user = unit.bot.get_user(uid) or await unit.bot.fetch_user(uid)
+                    file = discord.File(BytesIO(image), filename=filename) if image else None
+                    await user.send(text[:1900], file=file) if file else await user.send(text[:1900])
+                except Exception as e:
+                    log.warning(f"ส่ง DM แจ้งแอดมิน {uid} ไม่ได้: {e}")
+
+        @app_commands.command(name="pay", description="ส่งสลิปพร้อมเพย์ เปิด/ต่ออายุ Voice Relay ให้เซิร์ฟนี้อัตโนมัติ")
+        @app_commands.guild_only()
+        @app_commands.describe(
+            slip="รูปสลิปโอนเงิน (พร้อมเพย์/ธนาคาร)",
+            speakers="จำนวนบอทลูกน้องที่ซื้อ (ขั้นต่ำ 5)",
+            listeners="จำนวนบอทหัวหน้า 1 หรือ 2",
+        )
+        async def pay(interaction: discord.Interaction, slip: discord.Attachment,
+                      speakers: app_commands.Range[int, 5, 99] = 5, listeners: app_commands.Range[int, 1, 2] = 1):
+            await interaction.response.defer(ephemeral=True)
+            guild = interaction.guild
+            if guild.id in access.EXEMPT_GUILD_IDS or not access.is_enabled():
+                return await interaction.followup.send("ℹ️ เซิร์ฟนี้ใช้ Voice Relay ได้ฟรีอยู่แล้ว ไม่ต้องจ่าย", ephemeral=True)
+            if speakers > len(pool.speaker_bots):
+                return await interaction.followup.send(f"❌ ตอนนี้มีบอทลูกน้องให้ซื้อได้สูงสุด {len(pool.speaker_bots)} ตัว", ephemeral=True)
+            if not (slip.content_type or "").startswith("image/") or slip.size > 4 * 1024 * 1024:
+                return await interaction.followup.send("❌ แนบเป็นรูปสลิป (JPG/PNG/WebP) ขนาดไม่เกิน 4MB", ephemeral=True)
+
+            image = await slip.read()
+            price = (listeners + speakers) * access.PRICE_PER_BOT
+            res = await slip_verify.verify(image, slip.filename, price)
+            who = f"{interaction.user} (`{interaction.user.id}`) เซิร์ฟ {guild.name} (`{guild.id}`)"
+            order = f"หัวหน้า {listeners} + ลูกน้อง {speakers} = {price} บาท/เดือน"
+
+            if res.ok:
+                days = access.days_for_amount(res.amount, listeners, speakers)
+                acc = await access.grant_from_slip(guild.id, listeners, speakers, days, res.trans_ref, res.amount, interaction.user.id)
+                if acc is None:
+                    await interaction.followup.send("❌ สลิปนี้ถูกใช้ไปแล้ว", ephemeral=True)
+                    return await _notify_admins(f"⚠️ มีคนส่งสลิปซ้ำ: {who}\nเลขอ้างอิง {res.trans_ref}", image, slip.filename)
+                until = acc.paid_until.astimezone(TH_TZ).strftime("%d/%m/%Y %H:%M")
+                await interaction.followup.send(
+                    f"✅ ได้รับเงิน {res.amount:,.0f} บาทแล้ว เปิด Voice Relay ให้เซิร์ฟนี้\n{order}\nใช้ได้ {days} วัน ถึง {until}",
+                    ephemeral=True)
+                return await _notify_admins(f"💰 เปิดสิทธิ์อัตโนมัติ: {who}\n{order} · โอน {res.amount:,.0f} บาท จาก {res.sender or '?'}\n"
+                                            f"{days} วัน ถึง {until} · อ้างอิง {res.trans_ref}")
+
+            await interaction.followup.send(f"❌ {res.reason}", ephemeral=True)
+            if res.needs_admin:
+                await _notify_admins(f"📝 สลิปรอตรวจมือ: {who}\n{order}\nเหตุผล: {res.reason}"
+                                     + (f" · ยอด {res.amount:,.0f} บาท · อ้างอิง {res.trans_ref}" if res.trans_ref else "")
+                                     + f"\nเปิดให้ด้วย: `/admin grant guild_id:{guild.id} speakers:{speakers} listeners:{listeners}`",
+                                     image, slip.filename)
+
+        self.tree.add_command(pay)
 
     # ── events ──
 

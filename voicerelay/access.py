@@ -83,6 +83,20 @@ async def _get_pool() -> Optional[asyncpg.Pool]:
                 )
                 """
             )
+            await conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS relay_payments (
+                    trans_ref   TEXT PRIMARY KEY,
+                    guild_id    BIGINT NOT NULL,
+                    user_id     BIGINT NOT NULL,
+                    amount      NUMERIC(12, 2) NOT NULL,
+                    listeners   INTEGER NOT NULL,
+                    speakers    INTEGER NOT NULL,
+                    days        INTEGER NOT NULL,
+                    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            )
         log.info("เชื่อมฐานข้อมูลสิทธิ์ Voice Relay สำเร็จ")
     except Exception:
         log.exception("เชื่อม BILLING_DATABASE_URL ไม่สำเร็จ — ปล่อยผ่านชั่วคราว (จะลองใหม่ในรอบถัดไป)")
@@ -140,6 +154,53 @@ async def grant(guild_id: int, listeners: int, speakers: int, days: int, by: int
     )
     invalidate(guild_id)
     return Access(row["listeners"], row["speakers"], row["paid_until"])
+
+
+async def grant_from_slip(guild_id: int, listeners: int, speakers: int, days: int,
+                          trans_ref: str, amount: float, user_id: int) -> Optional[Access]:
+    """
+    บันทึกสลิปแล้วเปิด/ต่ออายุสิทธิ์ในธุรกรรมเดียว
+    คืน None ถ้าเลขอ้างอิงสลิปนี้เคยใช้แล้ว (กันส่งสลิปเดิมซ้ำ แม้ EasySlip จะพลาด)
+    """
+    pool = await _get_pool()
+    if pool is None:
+        return None
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            inserted = await conn.fetchval(
+                """
+                INSERT INTO relay_payments (trans_ref, guild_id, user_id, amount, listeners, speakers, days)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                ON CONFLICT (trans_ref) DO NOTHING
+                RETURNING trans_ref
+                """,
+                trans_ref, guild_id, user_id, amount, listeners, speakers, days,
+            )
+            if inserted is None:
+                return None
+            row = await conn.fetchrow(
+                """
+                INSERT INTO relay_access (guild_id, listeners, speakers, paid_until, note, granted_by, updated_at)
+                VALUES ($1, $2, $3, now() + make_interval(days => $4), $5, $6, now())
+                ON CONFLICT (guild_id) DO UPDATE SET
+                    listeners  = EXCLUDED.listeners,
+                    speakers   = EXCLUDED.speakers,
+                    paid_until = GREATEST(relay_access.paid_until, now()) + make_interval(days => $4),
+                    note       = EXCLUDED.note,
+                    granted_by = EXCLUDED.granted_by,
+                    updated_at = now()
+                RETURNING listeners, speakers, paid_until
+                """,
+                guild_id, listeners, speakers, days, f"สลิป {trans_ref}", user_id,
+            )
+    invalidate(guild_id)
+    return Access(row["listeners"], row["speakers"], row["paid_until"])
+
+
+def days_for_amount(amount: float, listeners: int, speakers: int) -> int:
+    """ยอดโอน → จำนวนวัน (ราคาเต็มเดือน = 30 วัน, โอนเกินได้วันเพิ่มตามสัดส่วน)"""
+    per_month = (listeners + speakers) * PRICE_PER_BOT
+    return int(amount / per_month * 30) if per_month else 0
 
 
 async def revoke(guild_id: int) -> bool:

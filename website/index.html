@@ -234,7 +234,7 @@ footer{border-top:1px solid var(--line);padding-top:24px;color:var(--muted);font
       </div>
     </div>
     <div class="pay" id="pay">
-      <div><h3>วิธีจ่ายเงิน</h3><p>โอนผ่านพร้อมเพย์หรือทรูมันนี่ แล้วส่งสลิปพร้อมเลขเซิร์ฟเวอร์ให้แอดมิน แอดมินจะเปิดบอทตามจำนวนที่จ่ายให้ ใช้ได้ 30 วัน</p><p style="font-size:14px;color:var(--muted)">เลขเซิร์ฟเวอร์ดูได้จากข้อความที่บอทตอบ ตอนสั่ง /relay ในเซิร์ฟที่ยังไม่ได้เปิดใช้</p></div>
+      <div><h3>วิธีจ่ายเงิน</h3><p>โอนพร้อมเพย์ แล้วพิมพ์ <code>/pay</code> ในเซิร์ฟเวอร์ของคุณพร้อมแนบสลิป ระบบตรวจสลิปและเปิดบอทให้ทันที ใช้ได้ 30 วัน (โอนเกินได้วันเพิ่มตามสัดส่วน)</p><p style="font-size:14px;color:var(--muted)">โอนทางทรูมันนี่ ส่งสลิปให้แอดมินเปิดให้</p></div>
       <div class="pp"><span class="pp-k">พร้อมเพย์</span><span class="pp-v" id="pp-id">{{PROMPTPAY_ID}}</span><span class="pp-n">{{PROMPTPAY_NAME}}</span><span class="pp-k" style="margin-top:6px">ทรูมันนี่</span><span class="pp-v">{{TRUEMONEY_ID}}</span><button class="tab" id="pp-copy" type="button">คัดลอกเลข</button></div>
     </div>
   </section>
