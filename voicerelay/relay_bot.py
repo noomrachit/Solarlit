@@ -907,10 +907,11 @@ class RelayUnit:
             listeners="จำนวนบอทหัวหน้า 1 หรือ 2",
             days="กี่วัน (ปกติ 30)",
             note="บันทึก เช่น เลขอ้างอิงสลิป",
+            user_id="เลขผู้ใช้ที่ส่งสลิป — ใส่แล้วบอทจะ DM แจ้งเขาว่าเปิดแล้ว",
         )
         async def admin_grant(interaction: discord.Interaction, guild_id: str, speakers: app_commands.Range[int, 5, 99],
                               listeners: app_commands.Range[int, 1, 2] = 1, days: app_commands.Range[int, 1, 366] = 30,
-                              note: Optional[str] = None):
+                              note: Optional[str] = None, user_id: Optional[str] = None):
             if not _is_admin(interaction):
                 return await _deny(interaction)
             if not guild_id.isdigit():
@@ -920,10 +921,18 @@ class RelayUnit:
             acc = await access.grant(int(guild_id), listeners, speakers, days, interaction.user.id, note or "")
             if acc is None:
                 return await interaction.response.send_message("❌ บันทึกไม่สำเร็จ ฐานข้อมูลต่อไม่ติด", ephemeral=True)
-            await interaction.response.send_message(
-                f"✅ เปิดสิทธิ์เซิร์ฟ `{guild_id}` แล้ว\n"
-                f"หัวหน้า {acc.listeners} + ลูกน้อง {acc.speakers} = {acc.listeners + acc.speakers} บอท · {access.monthly_price(acc)} บาท/เดือน\n"
-                f"ใช้ได้ถึง {_fmt(acc.paid_until)}", ephemeral=True)
+            summary = (f"หัวหน้า {acc.listeners} + ลูกน้อง {acc.speakers} = {acc.listeners + acc.speakers} บอท · "
+                       f"{access.monthly_price(acc)} บาท/เดือน\nใช้ได้ถึง {_fmt(acc.paid_until)}")
+            dm_note = ""
+            if user_id and user_id.isdigit():
+                try:
+                    customer = self.bot.get_user(int(user_id)) or await self.bot.fetch_user(int(user_id))
+                    g = self.bot.get_guild(int(guild_id))
+                    await customer.send(f"✅ เปิด Voice Relay ให้เซิร์ฟ {g.name if g else guild_id} แล้ว\n{summary}\nใช้คำสั่ง /relay go ได้เลย")
+                    dm_note = "\n📨 แจ้งลูกค้าทาง DM แล้ว"
+                except Exception:
+                    dm_note = "\n⚠️ ส่ง DM แจ้งลูกค้าไม่ได้ (เขาอาจปิด DM)"
+            await interaction.response.send_message(f"✅ เปิดสิทธิ์เซิร์ฟ `{guild_id}` แล้ว\n{summary}{dm_note}", ephemeral=True)
 
         @admin_group.command(name="revoke", description="ปิดสิทธิ์ Voice Relay ของเซิร์ฟเวอร์ทันที")
         @app_commands.describe(guild_id="เลขเซิร์ฟเวอร์")
@@ -1007,7 +1016,7 @@ class RelayUnit:
             if res.needs_admin:
                 await _notify_admins(f"📝 สลิปรอตรวจมือ: {who}\n{order}\nเหตุผล: {res.reason}"
                                      + (f" · ยอด {res.amount:,.0f} บาท · อ้างอิง {res.trans_ref}" if res.trans_ref else "")
-                                     + f"\nเปิดให้ด้วย: `/admin grant guild_id:{guild.id} speakers:{speakers} listeners:{listeners}`",
+                                     + f"\nเปิดให้ด้วย: `/admin grant guild_id:{guild.id} speakers:{speakers} listeners:{listeners} user_id:{interaction.user.id}`",
                                      image, slip.filename)
 
         self.tree.add_command(pay)

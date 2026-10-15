@@ -45,7 +45,7 @@ async def verify(image: bytes, filename: str, expected_min: float) -> SlipResult
     """ส่งรูปสลิปไปตรวจ คืนผลที่ตัดสินแล้วว่าใช้เปิดสิทธิ์ได้หรือไม่"""
     key = os.getenv("EASYSLIP_API_KEY")
     if not key:
-        return SlipResult(False, "ยังไม่ได้เปิดระบบตรวจสลิปอัตโนมัติ ส่งให้แอดมินตรวจแล้ว", needs_admin=True)
+        return SlipResult(False, "ได้รับสลิปแล้ว ส่งให้แอดมินตรวจ จะเปิดบอทให้และแจ้งกลับทาง DM", needs_admin=True)
 
     form = aiohttp.FormData()
     form.add_field("image", image, filename=filename or "slip.jpg")
