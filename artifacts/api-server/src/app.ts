@@ -10,6 +10,24 @@ import router from "./routes";
 import { logger } from "./lib/logger";
 const app: Express = express();
 
+// Railway terminates TLS at its proxy: trust the first hop so req.secure,
+// req.ip (rate limiting) and the `secure` session cookie work correctly.
+app.set("trust proxy", 1);
+app.disable("x-powered-by");
+
+// Security headers on every response (no extra dependency needed).
+app.use((_req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+  if (process.env["NODE_ENV"] === "production") {
+    res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  }
+  next();
+});
+
 // Dashboard is built separately (see package.json's "build" script) into
 // artifacts/dashboard/dist/public and served from here so the dashboard and
 // API ship as a single deployable service.
@@ -55,11 +73,31 @@ app.use(
     },
   }),
 );
-app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// The dashboard is served from this same origin, so cross-origin access is
+// off by default. Extra origins can be allowed via CORS_ORIGINS (comma-separated).
+const corsOrigins = (process.env["CORS_ORIGINS"] ?? "")
+  .split(",")
+  .map((o) => o.trim())
+  .filter(Boolean);
+app.use(cors({ origin: corsOrigins.length ? corsOrigins : false, credentials: true }));
+app.use(express.json({ limit: "100kb" }));
+app.use(express.urlencoded({ extended: true, limit: "100kb" }));
 
-app.use("/api", router);
+// Rate limits: login/OAuth endpoints are the most attractive to hammer.
+const authRateLimit = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+const apiRateLimit = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use("/api/auth", authRateLimit);
+app.use("/api", apiRateLimit, router);
 
 if (fs.existsSync(dashboardDist)) {
   // Dashboard static/SPA-fallback routes read from disk on every request;

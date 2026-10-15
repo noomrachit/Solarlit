@@ -408,7 +408,7 @@ class RelayUnit:
         msg = None
         if acc is None:
             msg = ("🔒 เซิร์ฟเวอร์นี้ยังไม่ได้เปิดใช้ Voice Relay หรือหมดอายุแล้ว\n"
-                   f"ราคาตัวละ 10 บาท/เดือน เริ่ม 60 บาท โอนพร้อมเพย์แล้วส่งสลิปด้วย `/pay` ระบบเปิดให้ทันที: {WEBSITE_URL}/#plans\n"
+                   f"ราคาตัวละ 10 บาท/เดือน เริ่ม 60 บาท โอนพร้อมเพย์แล้วส่งสลิปด้วย `/pay` ใช้ได้ทันทีชั่วคราว {access.PROVISIONAL_DAYS} วันระหว่างรอแอดมินตรวจ: {WEBSITE_URL}/#plans\n"
                    f"แจ้งเลขเซิร์ฟเวอร์นี้ให้แอดมินด้วย: `{interaction.guild.id}`")
         elif self.unit_no > acc.listeners:
             msg = f"🔒 แพ็กเกจของเซิร์ฟเวอร์นี้ใช้หัวหน้าได้ {acc.listeners} ตัว — ใช้คำสั่งของหัวหน้าตัวแรกแทน หรือซื้อหัวหน้าเพิ่ม"
@@ -824,6 +824,55 @@ class RelayUnit:
             lines.insert(0, f"ผูกอัตโนมัติสำเร็จ {ok}/{len(rooms)} ห้อง")
             lines.append("")
             lines.append("ต่อไปนี้: ห้องไหนมีคนเข้า → บอทเข้าเอง / ห้องว่าง → บอทออกเอง · ยกเลิกด้วย `/relay unbind`")
+            await interaction.followup.send("\n".join(lines), ephemeral=True)
+
+        @relay_group.command(name="name", description="ตั้งชื่อบอทในเซิร์ฟนี้: หัวหน้า และลูกน้องทุกตัว (เรียงเลข 1, 2, 3...)")
+        @has_relay_perms()
+        @app_commands.describe(
+            head="ชื่อของหัวหน้าตัวนี้ (พิมพ์ - เพื่อคืนชื่อเดิม)",
+            speakers="ชื่อนำหน้าของลูกน้อง เช่น 'ห้องทีม' → ห้องทีม 1, ห้องทีม 2 (พิมพ์ - เพื่อคืนชื่อเดิม)",
+        )
+        async def relay_name(interaction: discord.Interaction,
+                             head: Optional[app_commands.Range[str, 1, 32]] = None,
+                             speakers: Optional[app_commands.Range[str, 1, 28]] = None):
+            if head is None and speakers is None:
+                return await interaction.response.send_message("ใส่ชื่ออย่างน้อย 1 ช่อง (head หรือ speakers)", ephemeral=True)
+            await interaction.response.defer(ephemeral=True)
+            guild_id = interaction.guild.id
+            lines = []
+            if head is not None:
+                me = interaction.guild.me
+                try:
+                    await me.edit(nick=None if head.strip() == "-" else head.strip())
+                    lines.append(f"✅ {unit.name} → " + ("คืนชื่อเดิมแล้ว" if head.strip() == "-" else head.strip()))
+                except discord.Forbidden:
+                    lines.append(f"❌ {unit.name}: บอทไม่มีสิทธิ์ Change Nickname ในเซิร์ฟนี้")
+                except discord.HTTPException as e:
+                    lines.append(f"❌ {unit.name}: {e.text or e}")
+            if speakers is not None:
+                prefix = speakers.strip()
+                acc = await access.get_access(guild_id)
+                limit = acc.speakers if acc else 0
+                done = fail = 0
+                no = 0
+                for sbot in pool.speaker_bots:
+                    if no >= limit:
+                        break
+                    g = sbot.get_guild(guild_id)
+                    if g is None or g.me is None:
+                        continue  # ลูกน้องตัวนี้ยังไม่ได้เชิญเข้าเซิร์ฟนี้
+                    no += 1
+                    try:
+                        await g.me.edit(nick=None if prefix == "-" else f"{prefix} {no}")
+                        done += 1
+                    except discord.HTTPException:
+                        fail += 1
+                    await asyncio.sleep(0.5)  # กันโดน rate limit ตอนเปลี่ยนหลายตัว
+                if no == 0:
+                    lines.append("⚠️ ยังไม่มีบอทลูกน้องอยู่ในเซิร์ฟนี้ — เชิญลูกน้องก่อน")
+                else:
+                    what = "คืนชื่อเดิม" if prefix == "-" else f"ตั้งชื่อ {prefix} 1–{no}"
+                    lines.append(f"✅ ลูกน้อง {what} สำเร็จ {done} ตัว" + (f" · ไม่สำเร็จ {fail} ตัว (ไม่มีสิทธิ์ Change Nickname)" if fail else ""))
             await interaction.followup.send("\n".join(lines), ephemeral=True)
 
         @relay_group.command(name="unbind", description="ยกเลิกการผูกอัตโนมัติทั้งหมดของหัวหน้าตัวนี้ (บอทจะไม่ตามเข้า-ออกห้องไหนอีก)")
