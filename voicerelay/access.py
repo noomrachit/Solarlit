@@ -34,6 +34,8 @@ EXEMPT_GUILD_IDS = {
 ADMIN_USER_IDS = {int(x) for x in os.getenv("ADMIN_USER_IDS", "").replace(" ", "").split(",") if x.isdigit()}
 
 PRICE_PER_BOT = 10
+PROVISIONAL_DAYS = 7      # ส่งสลิปแล้วใช้ได้ทันทีระหว่างรอแอดมินตรวจ
+REJECT_COOLDOWN_DAYS = 30  # เซิร์ฟที่เคยโดนปฏิเสธสลิป ไม่ได้สิทธิ์ชั่วคราวอีกช่วงนี้
 _CACHE_TTL = 60
 
 
@@ -94,6 +96,27 @@ async def _get_pool() -> Optional[asyncpg.Pool]:
                     speakers    INTEGER NOT NULL,
                     days        INTEGER NOT NULL,
                     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            )
+            await conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS relay_pending (
+                    id               SERIAL PRIMARY KEY,
+                    guild_id         BIGINT NOT NULL,
+                    user_id          BIGINT NOT NULL,
+                    listeners        INTEGER NOT NULL,
+                    speakers         INTEGER NOT NULL,
+                    image_sha256     TEXT NOT NULL UNIQUE,
+                    status           TEXT NOT NULL DEFAULT 'pending',  -- pending | approved | rejected
+                    provisional      BOOLEAN NOT NULL DEFAULT FALSE,
+                    prev_listeners   INTEGER,
+                    prev_speakers    INTEGER,
+                    prev_paid_until  TIMESTAMPTZ,
+                    reminded         BOOLEAN NOT NULL DEFAULT FALSE,
+                    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    decided_by       BIGINT,
+                    decided_at       TIMESTAMPTZ
                 )
                 """
             )
@@ -201,6 +224,152 @@ def days_for_amount(amount: float, listeners: int, speakers: int) -> int:
     """ยอดโอน → จำนวนวัน (ราคาเต็มเดือน = 30 วัน, โอนเกินได้วันเพิ่มตามสัดส่วน)"""
     per_month = (listeners + speakers) * PRICE_PER_BOT
     return int(amount / per_month * 30) if per_month else 0
+
+
+# ── สลิปรอตรวจ (ระบบไม่เสียค่าบริการ: แอดมินตรวจเอง, ลูกค้าใช้ได้ชั่วคราวระหว่างรอ) ──
+
+class PendingResult(NamedTuple):
+    status: str                      # created | duplicate_image | already_pending | error
+    pending_id: Optional[int] = None
+    provisional_until: Optional[datetime] = None  # None = ไม่ได้สิทธิ์ชั่วคราว (เคยโดนปฏิเสธ)
+
+
+async def create_pending(guild_id: int, user_id: int, listeners: int, speakers: int, image_sha256: str) -> PendingResult:
+    """บันทึกสลิปรอตรวจ + เปิดสิทธิ์ชั่วคราว PROVISIONAL_DAYS วัน (ถ้าเซิร์ฟนี้ไม่เคยโดนปฏิเสธใน 30 วัน)"""
+    pool = await _get_pool()
+    if pool is None:
+        return PendingResult("error")
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            if await conn.fetchval("SELECT 1 FROM relay_pending WHERE image_sha256 = $1", image_sha256):
+                return PendingResult("duplicate_image")
+            if await conn.fetchval("SELECT 1 FROM relay_pending WHERE guild_id = $1 AND status = 'pending'", guild_id):
+                return PendingResult("already_pending")
+            rejected_recently = await conn.fetchval(
+                "SELECT 1 FROM relay_pending WHERE guild_id = $1 AND status = 'rejected' "
+                "AND decided_at > now() - make_interval(days => $2)",
+                guild_id, REJECT_COOLDOWN_DAYS,
+            )
+            prev = await conn.fetchrow(
+                "SELECT listeners, speakers, paid_until FROM relay_access WHERE guild_id = $1", guild_id
+            )
+            provisional = not rejected_recently
+            pid = await conn.fetchval(
+                """
+                INSERT INTO relay_pending (guild_id, user_id, listeners, speakers, image_sha256, provisional,
+                                           prev_listeners, prev_speakers, prev_paid_until)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id
+                """,
+                guild_id, user_id, listeners, speakers, image_sha256, provisional,
+                prev["listeners"] if prev else None, prev["speakers"] if prev else None,
+                prev["paid_until"] if prev else None,
+            )
+            until = None
+            if provisional:
+                until = await conn.fetchval(
+                    """
+                    INSERT INTO relay_access (guild_id, listeners, speakers, paid_until, note, granted_by, updated_at)
+                    VALUES ($1, $2, $3, now() + make_interval(days => $4), $5, $6, now())
+                    ON CONFLICT (guild_id) DO UPDATE SET
+                        listeners  = GREATEST(relay_access.listeners, EXCLUDED.listeners),
+                        speakers   = GREATEST(relay_access.speakers, EXCLUDED.speakers),
+                        paid_until = GREATEST(relay_access.paid_until, EXCLUDED.paid_until),
+                        note       = EXCLUDED.note,
+                        updated_at = now()
+                    RETURNING paid_until
+                    """,
+                    guild_id, listeners, speakers, PROVISIONAL_DAYS, f"ชั่วคราว รอตรวจสลิป #{pid}", user_id,
+                )
+    invalidate(guild_id)
+    return PendingResult("created", pid, until)
+
+
+async def get_pending(pending_id: int):
+    pool = await _get_pool()
+    if pool is None:
+        return None
+    return await pool.fetchrow("SELECT * FROM relay_pending WHERE id = $1", pending_id)
+
+
+async def approve_pending(pending_id: int, admin_id: int, days: int = 30) -> Optional[tuple]:
+    """อนุมัติสลิป: นับ days วันต่อจากวันหมดที่จ่ายจริงก่อนหน้า (ไม่นับช่วงชั่วคราว) คืน (row, Access)"""
+    pool = await _get_pool()
+    if pool is None:
+        return None
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                "UPDATE relay_pending SET status = 'approved', decided_by = $2, decided_at = now() "
+                "WHERE id = $1 AND status = 'pending' RETURNING *", pending_id, admin_id,
+            )
+            if row is None:
+                return None
+            acc = await conn.fetchrow(
+                """
+                INSERT INTO relay_access (guild_id, listeners, speakers, paid_until, note, granted_by, updated_at)
+                VALUES ($1, $2, $3, GREATEST($4::timestamptz, now()) + make_interval(days => $5), $6, $7, now())
+                ON CONFLICT (guild_id) DO UPDATE SET
+                    listeners  = EXCLUDED.listeners,
+                    speakers   = EXCLUDED.speakers,
+                    paid_until = EXCLUDED.paid_until,
+                    note       = EXCLUDED.note,
+                    granted_by = EXCLUDED.granted_by,
+                    updated_at = now()
+                RETURNING listeners, speakers, paid_until
+                """,
+                row["guild_id"], row["listeners"], row["speakers"], row["prev_paid_until"], days,
+                f"อนุมัติสลิป #{pending_id}", admin_id,
+            )
+    invalidate(row["guild_id"])
+    return row, Access(acc["listeners"], acc["speakers"], acc["paid_until"])
+
+
+async def reject_pending(pending_id: int, admin_id: int):
+    """ปฏิเสธสลิป: คืนสิทธิ์กลับเป็นเหมือนก่อนส่งสลิป (ไม่มี = ปิดสิทธิ์) คืน row ของสลิป"""
+    pool = await _get_pool()
+    if pool is None:
+        return None
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                "UPDATE relay_pending SET status = 'rejected', decided_by = $2, decided_at = now() "
+                "WHERE id = $1 AND status = 'pending' RETURNING *", pending_id, admin_id,
+            )
+            if row is None:
+                return None
+            if row["provisional"]:
+                if row["prev_paid_until"] is None:
+                    await conn.execute("DELETE FROM relay_access WHERE guild_id = $1", row["guild_id"])
+                else:
+                    await conn.execute(
+                        "UPDATE relay_access SET listeners = $2, speakers = $3, paid_until = $4, "
+                        "note = $5, updated_at = now() WHERE guild_id = $1",
+                        row["guild_id"], row["prev_listeners"], row["prev_speakers"], row["prev_paid_until"],
+                        f"ปฏิเสธสลิป #{pending_id}",
+                    )
+    invalidate(row["guild_id"])
+    return row
+
+
+async def list_pending() -> list:
+    pool = await _get_pool()
+    if pool is None:
+        return []
+    return await pool.fetch(
+        "SELECT * FROM relay_pending WHERE status = 'pending' ORDER BY created_at ASC LIMIT 25"
+    )
+
+
+async def due_reminders() -> list:
+    """สลิปที่รอเกิน PROVISIONAL_DAYS-1 วันและยังไม่เคยเตือน — ทำเครื่องหมายว่าเตือนแล้วในคราวเดียว"""
+    pool = await _get_pool()
+    if pool is None:
+        return []
+    return await pool.fetch(
+        "UPDATE relay_pending SET reminded = TRUE WHERE status = 'pending' AND reminded = FALSE "
+        "AND created_at < now() - make_interval(days => $1) RETURNING *",
+        PROVISIONAL_DAYS - 1,
+    )
 
 
 async def revoke(guild_id: int) -> bool:

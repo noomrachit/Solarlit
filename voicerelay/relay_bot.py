@@ -53,6 +53,8 @@ from discord.ext import voice_recv
 from dotenv import load_dotenv
 from aiohttp import web
 
+import hashlib
+
 import access
 import slip_verify
 
@@ -961,6 +963,64 @@ class RelayUnit:
                 lines.append("ยังไม่มีเซิร์ฟเวอร์ที่จ่ายเงิน")
             await interaction.response.send_message("\n".join(lines)[:1900], ephemeral=True)
 
+        async def _dm(user_id: int, text: str) -> bool:
+            try:
+                u = self.bot.get_user(user_id) or await self.bot.fetch_user(user_id)
+                await u.send(text[:1900])
+                return True
+            except Exception:
+                return False
+
+        @admin_group.command(name="approve", description="อนุมัติสลิปที่รอตรวจ → เปิดสิทธิ์เต็ม (ปกติ 30 วัน) และแจ้งลูกค้า")
+        @app_commands.describe(pending_id="เลขสลิปรอตรวจ (#) จาก DM หรือ /admin pending", days="กี่วัน (ปกติ 30)")
+        async def admin_approve(interaction: discord.Interaction, pending_id: int, days: app_commands.Range[int, 1, 366] = 30):
+            if not _is_admin(interaction):
+                return await _deny(interaction)
+            res = await access.approve_pending(pending_id, interaction.user.id, days)
+            if res is None:
+                return await interaction.response.send_message(f"❌ ไม่พบสลิป #{pending_id} ที่ยังรอตรวจ", ephemeral=True)
+            row, acc = res
+            g = self.bot.get_guild(row["guild_id"])
+            gname = g.name if g else str(row["guild_id"])
+            sent = await _dm(row["user_id"], f"✅ ตรวจสลิปแล้ว เปิด Voice Relay ให้เซิร์ฟ {gname}\n"
+                                              f"หัวหน้า {acc.listeners} + ลูกน้อง {acc.speakers} · ใช้ได้ถึง {_fmt(acc.paid_until)}")
+            await interaction.response.send_message(
+                f"✅ อนุมัติสลิป #{pending_id} เซิร์ฟ {gname} ใช้ได้ถึง {_fmt(acc.paid_until)}"
+                + ("\n📨 แจ้งลูกค้าแล้ว" if sent else "\n⚠️ ส่ง DM แจ้งลูกค้าไม่ได้"), ephemeral=True)
+
+        @admin_group.command(name="reject", description="ปฏิเสธสลิป → ยกเลิกสิทธิ์ชั่วคราว และแจ้งลูกค้า")
+        @app_commands.describe(pending_id="เลขสลิปรอตรวจ (#)", reason="เหตุผลที่แจ้งลูกค้า เช่น ยอดไม่ครบ / สลิปไม่ถูกต้อง")
+        async def admin_reject(interaction: discord.Interaction, pending_id: int, reason: Optional[str] = None):
+            if not _is_admin(interaction):
+                return await _deny(interaction)
+            row = await access.reject_pending(pending_id, interaction.user.id)
+            if row is None:
+                return await interaction.response.send_message(f"❌ ไม่พบสลิป #{pending_id} ที่ยังรอตรวจ", ephemeral=True)
+            g = self.bot.get_guild(row["guild_id"])
+            gname = g.name if g else str(row["guild_id"])
+            sent = await _dm(row["user_id"], f"❌ สลิปที่ส่งสำหรับเซิร์ฟ {gname} ไม่ผ่านการตรวจ"
+                                              + (f": {reason}" if reason else "")
+                                              + "\nสิทธิ์ชั่วคราวถูกยกเลิกแล้ว ติดต่อแอดมินถ้าคิดว่าผิดพลาด")
+            await interaction.response.send_message(
+                f"🚫 ปฏิเสธสลิป #{pending_id} เซิร์ฟ {gname} แล้ว" + ("\n📨 แจ้งลูกค้าแล้ว" if sent else "\n⚠️ ส่ง DM แจ้งลูกค้าไม่ได้"),
+                ephemeral=True)
+
+        @admin_group.command(name="pending", description="ดูสลิปที่รอตรวจ")
+        async def admin_pending(interaction: discord.Interaction):
+            if not _is_admin(interaction):
+                return await _deny(interaction)
+            rows = await access.list_pending()
+            if not rows:
+                return await interaction.response.send_message("ไม่มีสลิปรอตรวจ", ephemeral=True)
+            lines = []
+            for r in rows:
+                g = self.bot.get_guild(r["guild_id"])
+                price = (r["listeners"] + r["speakers"]) * access.PRICE_PER_BOT
+                lines.append(f"• #{r['id']} {g.name if g else r['guild_id']} · หัวหน้า {r['listeners']} + ลูกน้อง {r['speakers']} = {price} บาท"
+                             f" · ส่งเมื่อ {_fmt(r['created_at'])}" + ("" if r["provisional"] else " · ไม่ได้สิทธิ์ชั่วคราว"))
+            lines.append("อนุมัติ `/admin approve pending_id:#` · ปฏิเสธ `/admin reject pending_id:#`")
+            await interaction.response.send_message("\n".join(lines)[:1900], ephemeral=True)
+
         self.tree.add_command(admin_group)
 
         unit = self
@@ -975,7 +1035,7 @@ class RelayUnit:
                 except Exception as e:
                     log.warning(f"ส่ง DM แจ้งแอดมิน {uid} ไม่ได้: {e}")
 
-        @app_commands.command(name="pay", description="ส่งสลิปพร้อมเพย์ เปิด/ต่ออายุ Voice Relay ให้เซิร์ฟนี้อัตโนมัติ")
+        @app_commands.command(name="pay", description="ส่งสลิปพร้อมเพย์ เปิด/ต่ออายุ Voice Relay (ใช้ได้ทันทีระหว่างรอตรวจ)")
         @app_commands.guild_only()
         @app_commands.describe(
             slip="รูปสลิปโอนเงิน (พร้อมเพย์/ธนาคาร)",
@@ -1012,12 +1072,31 @@ class RelayUnit:
                 return await _notify_admins(f"💰 เปิดสิทธิ์อัตโนมัติ: {who}\n{order} · โอน {res.amount:,.0f} บาท จาก {res.sender or '?'}\n"
                                             f"{days} วัน ถึง {until} · อ้างอิง {res.trans_ref}")
 
-            await interaction.followup.send(f"❌ {res.reason}", ephemeral=True)
-            if res.needs_admin:
-                await _notify_admins(f"📝 สลิปรอตรวจมือ: {who}\n{order}\nเหตุผล: {res.reason}"
-                                     + (f" · ยอด {res.amount:,.0f} บาท · อ้างอิง {res.trans_ref}" if res.trans_ref else "")
-                                     + f"\nเปิดให้ด้วย: `/admin grant guild_id:{guild.id} speakers:{speakers} listeners:{listeners} user_id:{interaction.user.id}`",
-                                     image, slip.filename)
+            if not res.needs_admin:
+                return await interaction.followup.send(f"❌ {res.reason}", ephemeral=True)
+
+            # ตรวจอัตโนมัติไม่ได้ → ให้แอดมินตรวจ ระหว่างนี้เปิดให้ใช้ชั่วคราว
+            pend = await access.create_pending(guild.id, interaction.user.id, listeners, speakers,
+                                               hashlib.sha256(image).hexdigest())
+            if pend.status == "duplicate_image":
+                return await interaction.followup.send("❌ สลิปนี้เคยส่งมาแล้ว", ephemeral=True)
+            if pend.status == "already_pending":
+                return await interaction.followup.send("ℹ️ เซิร์ฟนี้มีสลิปรอแอดมินตรวจอยู่แล้ว รอผลทาง DM ได้เลย", ephemeral=True)
+            if pend.status != "created":
+                return await interaction.followup.send("❌ ระบบบันทึกสลิปมีปัญหา ติดต่อแอดมิน", ephemeral=True)
+
+            if pend.provisional_until:
+                msg = (f"✅ ได้รับสลิปแล้ว (#{pend.pending_id}) เปิดให้ใช้ชั่วคราวระหว่างรอแอดมินตรวจ ถึง "
+                       f"{pend.provisional_until.astimezone(TH_TZ).strftime('%d/%m/%Y %H:%M')}\n{order}\n"
+                       "ใช้ /relay go ได้เลย เมื่อแอดมินตรวจแล้วจะแจ้งทาง DM")
+            else:
+                msg = f"✅ ได้รับสลิปแล้ว (#{pend.pending_id}) รอแอดมินตรวจ จะแจ้งผลทาง DM\n{order}"
+            await interaction.followup.send(msg, ephemeral=True)
+            await _notify_admins(
+                f"📝 สลิปรอตรวจ #{pend.pending_id}: {who}\n{order}"
+                + (f"\nให้ใช้ชั่วคราวแล้ว {access.PROVISIONAL_DAYS} วัน" if pend.provisional_until else "\n⚠️ เซิร์ฟนี้เคยโดนปฏิเสธสลิป — ไม่ได้สิทธิ์ชั่วคราว")
+                + f"\nอนุมัติ: `/admin approve pending_id:{pend.pending_id}` · ปฏิเสธ: `/admin reject pending_id:{pend.pending_id}`",
+                image, slip.filename)
 
         self.tree.add_command(pay)
 
@@ -1103,6 +1182,26 @@ def make_speaker_voice_handler(index: int, pool: SpeakerPool):
                     log.error(f"[{owner.name}/Speaker {index + 1}] Auto-join ล้มเหลว: {e}")
 
     return on_voice_state_update
+
+
+async def pending_reminder_loop(unit: "RelayUnit"):
+    """ทุกชั่วโมง: เตือนแอดมินถ้ามีสลิปรอตรวจใกล้หมดช่วงใช้ชั่วคราว"""
+    await asyncio.sleep(120)
+    while True:
+        try:
+            if access.is_enabled() and access.ADMIN_USER_IDS:
+                rows = await access.due_reminders()
+                if rows:
+                    text = "⏰ สลิปรอตรวจใกล้หมดช่วงใช้ชั่วคราว: " + ", ".join(f"#{r['id']}" for r in rows) + " — ดู `/admin pending`"
+                    for uid in access.ADMIN_USER_IDS:
+                        try:
+                            u = unit.bot.get_user(uid) or await unit.bot.fetch_user(uid)
+                            await u.send(text)
+                        except Exception as e:
+                            log.warning(f"เตือนแอดมิน {uid} ไม่ได้: {e}")
+        except Exception:
+            log.exception("pending_reminder_loop ผิดพลาด")
+        await asyncio.sleep(3600)
 
 
 async def _start_bot_safe(bot: commands.Bot, token: str, label: str):
@@ -1201,6 +1300,7 @@ async def main():
             await stack.enter_async_context(sbot)
 
         asyncio.create_task(mixer_pump(units, pool))
+        asyncio.create_task(pending_reminder_loop(units[0]))
         asyncio.create_task(start_health_server())
 
         tasks = [_start_bot_safe(unit.bot, unit.token, unit.name) for unit in units]
