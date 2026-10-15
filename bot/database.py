@@ -179,8 +179,6 @@ async def init_db():
         await conn.execute(
             """
             ALTER TABLE queue ADD COLUMN IF NOT EXISTS called BOOLEAN DEFAULT FALSE;
-            -- คิวแยกตามห้อง: กระดานที่ scope_id มีค่า = ใช้คิวของห้องนั้น (เก็บในคอลัมน์ guild_id ของตารางคิว)
-            ALTER TABLE queue_board ADD COLUMN IF NOT EXISTS scope_id BIGINT;
             """
         )
 

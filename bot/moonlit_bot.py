@@ -798,24 +798,25 @@ tree.add_command(rr_group)
 # ─────────────────────────────────────────────
 
 # ── คิวแยกตามห้อง ─────────────────────────────
+# กระดานอยู่ห้องไหน = คิวของห้องนั้น (แต่ละห้องที่มีกระดานมีคิวแยกของตัวเอง)
 # ตารางคิวทุกตัว (queue / queue_skipped / queue_bookings / queue_history) ใช้คอลัมน์ guild_id เป็น "ขอบเขตคิว":
-#   = guild.id   → คิวรวมของเซิร์ฟ (แบบเดิม)
-#   = channel.id → คิวแยกของห้องนั้น (เปิดด้วย /queue board separate:True)
-# snowflake ของห้องกับของเซิร์ฟไม่มีทางซ้ำกัน ข้อมูลคิวเดิมจึงใช้ต่อได้โดยไม่ต้องย้ายข้อมูล
+#   = channel.id → คิวของห้องที่มีกระดาน
+#   = guild.id   → คิวรวมของเซิร์ฟ (ใช้กับคำสั่ง /queue ที่พิมพ์ในห้องที่ไม่มีกระดาน)
+# snowflake ของห้องกับของเซิร์ฟไม่มีทางซ้ำกัน จึงไม่ต้องเพิ่มคอลัมน์ในตารางคิว
 _queue_scope_cache: dict[int, int] = {}
 
 
 async def queue_scope(interaction: discord.Interaction) -> int:
-    """ขอบเขตคิวของห้องที่กด/พิมพ์คำสั่ง: ห้องที่แยกคิวไว้ = channel.id, ห้องอื่น = guild.id"""
+    """ขอบเขตคิวของห้องที่กด/พิมพ์คำสั่ง: ห้องที่มีกระดาน = channel.id, ห้องอื่น = guild.id"""
     channel_id = interaction.channel_id
     if channel_id in _queue_scope_cache:
         return _queue_scope_cache[channel_id]
     pool = await db.get_pool()
-    scope_id = await pool.fetchval(
-        "SELECT scope_id FROM queue_board WHERE guild_id = $1 AND channel_id = $2",
+    has_board = await pool.fetchval(
+        "SELECT 1 FROM queue_board WHERE guild_id = $1 AND channel_id = $2",
         interaction.guild.id, channel_id
     )
-    scope = scope_id or interaction.guild.id
+    scope = channel_id if has_board else interaction.guild.id
     _queue_scope_cache[channel_id] = scope
     return scope
 
@@ -870,11 +871,11 @@ async def refresh_all_boards(guild: discord.Guild, scope: Optional[int] = None):
     อัปเดต embed ของกระดานคิวในกิลด์นี้ให้เป็นเรียลไทม์
     - ส่ง scope มา = อัปเดตเฉพาะกระดานของคิวนั้น (คิวรวม หรือคิวของห้องที่แยกไว้)
     - ไม่ส่ง = อัปเดตทุกกระดานในกิลด์
-    กระดานแต่ละอันแสดงคิวของตัวเอง: scope_id ว่าง = คิวรวมของเซิร์ฟ / มีค่า = คิวแยกของห้องนั้น
+    กระดานแต่ละอันแสดงคิวของห้องที่กระดานอยู่
     """
     pool = await db.get_pool()
     boards = await pool.fetch(
-        "SELECT channel_id, message_id, scope_id FROM queue_board WHERE guild_id = $1",
+        "SELECT channel_id, message_id FROM queue_board WHERE guild_id = $1",
         guild.id
     )
     if not boards:
@@ -884,7 +885,7 @@ async def refresh_all_boards(guild: discord.Guild, scope: Optional[int] = None):
     embeds: dict[int, discord.Embed] = {}
 
     for board in boards:
-        board_scope = board["scope_id"] or guild.id
+        board_scope = board["channel_id"]
         if scope is not None and board_scope != scope:
             continue
         channel = guild.get_channel(board["channel_id"])
@@ -1832,11 +1833,10 @@ async def queue_refresh(interaction: discord.Interaction):
     await refresh_all_boards(interaction.guild)
     await interaction.response.send_message("🔄 รีเฟรชกระดานคิวทั้งหมดแล้ว", ephemeral=True)
 
-@queue_group.command(name="board", description="โพสต์กระดานคิวสด (รวมปุ่มเข้า/ออกคิว + เรียก/จบ/รีเฟรช ในที่เดียว)")
+@queue_group.command(name="board", description="โพสต์กระดานคิวสดของห้องนี้ (แต่ละห้องที่มีกระดาน มีคิวแยกของตัวเอง)")
 @has_mod_perms()
-@app_commands.describe(separate="True = ห้องนี้มีคิวของตัวเอง แยกจากคิวรวมของเซิร์ฟ / False (ค่าเริ่มต้น) = ใช้คิวรวม")
-async def queue_board(interaction: discord.Interaction, separate: bool = False):
-    scope = interaction.channel.id if separate else interaction.guild.id
+async def queue_board(interaction: discord.Interaction):
+    scope = interaction.channel.id
     embed = await build_queue_embed(interaction.guild, scope)
     view = QueueFullBoardView()
     await interaction.response.send_message(embed=embed, view=view)
@@ -1845,18 +1845,13 @@ async def queue_board(interaction: discord.Interaction, separate: bool = False):
     pool = await db.get_pool()
     await pool.execute(
         """
-        INSERT INTO queue_board (guild_id, channel_id, message_id, scope_id)
-        VALUES ($1, $2, $3, $4)
-        ON CONFLICT (guild_id, channel_id) DO UPDATE SET message_id = EXCLUDED.message_id, scope_id = EXCLUDED.scope_id
+        INSERT INTO queue_board (guild_id, channel_id, message_id)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (guild_id, channel_id) DO UPDATE SET message_id = EXCLUDED.message_id
         """,
-        interaction.guild.id, interaction.channel.id, msg.id, interaction.channel.id if separate else None
+        interaction.guild.id, interaction.channel.id, msg.id
     )
     _queue_scope_cache[interaction.channel.id] = scope
-    if separate:
-        await interaction.followup.send(
-            "🧩 ห้องนี้ใช้คิวแยกของตัวเองแล้ว — ปุ่มบนกระดานนี้ และคำสั่ง /queue ที่พิมพ์ในห้องนี้ จะจัดการเฉพาะคิวของห้องนี้",
-            ephemeral=True,
-        )
 
 tree.add_command(queue_group)
 
