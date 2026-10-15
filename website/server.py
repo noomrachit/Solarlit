@@ -18,6 +18,7 @@ def _render_index() -> str:
     support_url = os.getenv("SUPPORT_URL", "").strip()
     page = page.replace("{{PROMPTPAY_ID}}", html.escape(promptpay or "ขอเลขจากแอดมิน"))
     page = page.replace("{{PROMPTPAY_NAME}}", html.escape(promptpay_name))
+    page = page.replace("{{TRUEMONEY_ID}}", html.escape(os.getenv("TRUEMONEY_ID", "").strip() or "ขอเลขจากแอดมิน"))
     if support_url.startswith("https://"):
         page = page.replace("{{SUPPORT_URL}}", html.escape(support_url, quote=True))
     else:
