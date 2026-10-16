@@ -39,6 +39,25 @@ BANGKOK_TZ = ZoneInfo("Asia/Bangkok")
 BUNDLED_THAI_FONT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts", "NotoSansThai.ttf")
 
 
+# ฟอนต์สำรอง: ตัวอักษรที่ฟอนต์ไทยไม่มี (อีโมจิ, สัญลักษณ์ ★♛, ตัวอักษรแฟนซี 𝓝𝓲𝓬𝓴, ญี่ปุ่น/จีน 彡ツ) ให้ไปหาในฟอนต์ถัดไปตามลำดับ
+# แทนที่จะขึ้นเป็นกล่อง ☐ ในชื่อผู้เล่น (ทุกไฟล์ OFL license เดียวกับฟอนต์ไทย ดู fonts/OFL.txt)
+FALLBACK_FONT_FILES = ["NotoSansMath.ttf", "NotoSansSymbols2.ttf", "NotoSansSymbols.ttf", "NotoEmoji.ttf", "NotoSansJP.ttf"]
+
+
+def _fallback_fonts() -> list:
+    names = ["DejaVu Sans"]  # ติดมากับ matplotlib อยู่แล้ว ครอบคลุมสัญลักษณ์พื้นฐานเยอะ
+    for f in FALLBACK_FONT_FILES:
+        path = os.path.join(os.path.dirname(BUNDLED_THAI_FONT), f)
+        if not os.path.isfile(path):
+            continue
+        try:
+            fm.fontManager.addfont(path)
+            names.append(fm.FontProperties(fname=path).get_name())
+        except Exception as e:
+            log.warning(f"โหลดฟอนต์สำรอง {f} ไม่สำเร็จ: {e}")
+    return names
+
+
 def _configure_thai_font():
     """
     ฟอนต์ default ของ matplotlib (DejaVu Sans) ไม่มี glyph ภาษาไทย — ข้อความไทยในกราฟ (/voice graph)
@@ -51,7 +70,7 @@ def _configure_thai_font():
         try:
             fm.fontManager.addfont(BUNDLED_THAI_FONT)
             font_name = fm.FontProperties(fname=BUNDLED_THAI_FONT).get_name()
-            plt.rcParams["font.family"] = font_name
+            plt.rcParams["font.family"] = [font_name] + _fallback_fonts()
             log.info(f"ใช้ฟอนต์ไทยที่แนบมากับ repo ('{font_name}') สำหรับข้อความไทยในกราฟ/รูปภาพ")
             return
         except Exception as e:
@@ -61,7 +80,7 @@ def _configure_thai_font():
     available = {f.name for f in fm.fontManager.ttflist}
     for name in thai_font_names:
         if name in available:
-            plt.rcParams["font.family"] = name
+            plt.rcParams["font.family"] = [name] + _fallback_fonts()
             log.info(f"ใช้ฟอนต์ '{name}' สำหรับข้อความไทยในกราฟ/รูปภาพ")
             return
     log.warning("ไม่พบฟอนต์ที่รองรับภาษาไทยในระบบ — ข้อความไทยในกราฟ/รูปภาพ (/voice graph, /setup-playerboard) อาจขึ้นเป็นกล่องว่าง")
@@ -668,13 +687,26 @@ def _class_color(guild: discord.Guild, character_class: str) -> tuple:
 
 def _render_player_board_image(guild: discord.Guild, rows: list) -> io.BytesIO:
     """
-    วาดตารางรายชื่อสมาชิก (ชื่อในเกม / ชื่อในดิส / อาชีพ) เป็นรูปภาพ สีต่อแถวอิงจากสี role อาชีพจริงในดิส
-    เขียนแยกจาก refresh_player_board ไว้ เผื่ออนาคตจะเพิ่มคอลัมน์อื่น (เช่น เช็คชื่อ WOE รายสัปดาห์) ทีหลัง
+    วาดกระดานรายชื่อสมาชิกเป็นรูปภาพ แยกหมวดตามอาชีพ: แถบหัวหมวด (สี role อาชีพจริงในดิส + จำนวนคน)
+    ตามด้วยชื่อในเกม / ชื่อในดิส ของคนในอาชีพนั้น เรียงตามชื่อ  หมวดเรียงตามชื่ออาชีพ
     """
-    headers = ["ชื่อในเกม", "ชื่อในดิส", "อาชีพ"]
-    table_data = [[r["in_game_name"], r["discord_name"], r["character_class"]] for r in rows]
+    by_class = {}
+    for r in rows:
+        by_class.setdefault(r["character_class"] or "ไม่ระบุอาชีพ", []).append(r)
+    classes = sorted(by_class, key=lambda c: c.lower())
 
-    fig_height = 0.6 + 0.5 * (len(rows) + 1)
+    headers = ["ชื่อในเกม", "ชื่อในดิส"]
+    table_data, styles = [], []  # styles: ("class", color) | ("member", color)
+    for cls in classes:
+        members = sorted(by_class[cls], key=lambda r: (r["in_game_name"] or "").lower())
+        color = _class_color(guild, cls)
+        table_data.append([cls, f"{len(members)} คน"])
+        styles.append(("class", color))
+        for r in members:
+            table_data.append([r["in_game_name"], r["discord_name"]])
+            styles.append(("member", color))
+
+    fig_height = 0.6 + 0.5 * (len(table_data) + 1)
     fig, ax = plt.subplots(figsize=(8, fig_height))
     ax.axis("off")
 
@@ -689,13 +721,17 @@ def _render_player_board_image(guild: discord.Guild, rows: list) -> io.BytesIO:
         cell.set_facecolor((0.85, 0.45, 0.25))
         cell.set_text_props(weight="bold", color="white")
 
-    for i, r in enumerate(rows, start=1):
-        color = _class_color(guild, r["character_class"])
-        light = tuple(c * 0.35 + 0.65 for c in color)
-        table[i, 0].set_facecolor(light)
-        table[i, 1].set_facecolor(light)
-        table[i, 2].set_facecolor(color)
-        table[i, 2].set_text_props(weight="bold", color="white")
+    for i, (kind, color) in enumerate(styles, start=1):
+        if kind == "class":
+            lum = 0.299 * color[0] + 0.587 * color[1] + 0.114 * color[2]
+            for col in range(len(headers)):
+                table[i, col].set_facecolor(color)
+                table[i, col].set_text_props(weight="bold", color="black" if lum > 0.6 else "white")
+            table[i, 0].get_text().set_fontsize(12)
+        else:
+            light = tuple(c * 0.35 + 0.65 for c in color)
+            for col in range(len(headers)):
+                table[i, col].set_facecolor(light)
 
     fig.tight_layout()
     buf = io.BytesIO()
@@ -2116,15 +2152,22 @@ async def party_upload(interaction: discord.Interaction, image: discord.Attachme
                              "character_class": None, "min_score": 0.8})
     party_ocr.match_names(rows, profiles)
 
-    to_insert, unmatched = [], []
+    # ยึดตารางที่ส่งมาเป็นเกณฑ์: ชื่อ/อาชีพ/ช่อง ตามรูปทุกแถว — ใช้คนในดิสแค่ผูกตัวตน (ไว้กดลา/แท็ก)
+    to_insert, unmatched, dup_matched = [], [], []
+    used_ids = set()
     fake_id = 0
     for r in rows:
         p = r["profile"]
         cls = r["cls"] or (p and p["character_class"]) or "?"
+        img_name = r["name_texts"][0] if r["name_texts"] else None
+        if p and p["discord_user_id"] in used_ids:
+            # ชื่อในรูป 2 แถวไปตรงกับคนในดิสคนเดียวกัน → เก็บแถวนี้ไว้ตามรูป แต่ไม่ผูกกับใคร (เดิมแถวนี้หายไปเงียบๆ)
+            dup_matched.append(f"{_party_label(r['group'], r['party_num'])} ช่อง {r['slot']}: \"{img_name or '?'}\"")
+            p = None
         if p:
             uid = p["discord_user_id"]
-            # ถ้าจับคู่จากชื่อเล่นในดิส ใช้ชื่อที่อ่านจากรูปแทน
-            name = p["in_game_name"] if p.get("min_score") is None else (r["name_texts"][0] if r["name_texts"] else p["in_game_name"])
+            used_ids.add(uid)
+            name = img_name or p["in_game_name"]
         else:
             fake_id -= 1  # ยังผูกกับคนในดิสไม่ได้ → id ชั่วคราว (ติดลบ) จนกว่าเจ้าตัวจะกดลาแล้วเลือกชื่อ
             uid = fake_id
@@ -2143,8 +2186,7 @@ async def party_upload(interaction: discord.Interaction, image: discord.Attachme
                 """,
                 to_insert
             )
-            # กติกา: ทุกตี้ต้องมีพระ → ตี้ที่ไม่มีพระ สลับกับตี้ที่มีพระเกิน
-            swaps = await _ensure_priest_each_party(conn, guild_id)
+            # ไม่สลับใครเอง — ตี้ที่ไม่มีพระแค่เตือนด้านล่าง ให้แอดมินแก้ในรูปเอง
             # คนที่กดลาไว้ก่อนแล้ว → เอาออกจากตี้ตามกติกาทันที
             leave_ids = [r["discord_user_id"] for r in await conn.fetch(
                 "SELECT discord_user_id FROM party_leave WHERE guild_id = $1 ORDER BY left_at", guild_id
@@ -2157,13 +2199,14 @@ async def party_upload(interaction: discord.Interaction, image: discord.Attachme
     priests = sum(1 for v in grouped.values() for m in v if _is_priest(m["character_class"]))
     no_priest = _parties_without_priest(grouped)
 
-    msg = f"✅ จัดโพยตามรูปแล้ว: {len(grouped)} ตี้ / {total} คน / พระ {priests} คน"
-    if swaps:
-        msg += "\n🔁 สลับให้ทุกตี้มีพระ:\n" + "\n".join(f"• {x}" for x in swaps)
+    msg = f"✅ จัดโพยตามรูปแล้ว (ยึดตามรูปทั้งหมด): {len(grouped)} ตี้ / {total} คน / พระ {priests} คน"
     if leave_ids:
         msg += f"\n📋 เอาคนที่ลาไว้แล้วออก {len(leave_ids)} คน"
     if no_priest:
-        msg += f"\n⚠️ ตี้ที่ไม่มีพระ: {', '.join(no_priest)}"
+        msg += f"\n⚠️ ตี้ที่ไม่มีพระ (บอทไม่ได้สลับให้ ตารางยังตามรูป): {', '.join(no_priest)}"
+    if dup_matched:
+        msg += (f"\n⚠️ ชื่อในรูปคล้ายกับคนที่ผูกไปแล้ว {len(dup_matched)} แถว — ยังอยู่ในตารางตามรูป แต่ยังไม่ผูกกับใคร: "
+                + ", ".join(dup_matched))
     if unmatched:
         msg += (f"\n⚠️ ยังผูกกับคนในดิสไม่ได้ {len(unmatched)} คน (ส่วนใหญ่คือคนที่ยังไม่แนะนำตัว) — "
                 "ยังอยู่ในตารางตามรูป ตอนกดลาบอทจะให้เลือกชื่อตัวเองจากตาราง แล้วจำไว้ใช้รอบหน้า"

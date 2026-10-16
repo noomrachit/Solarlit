@@ -63,6 +63,15 @@ async def privacy(request):
     return web.Response(text=_read_html("privacy.html"), content_type="text/html", charset="utf-8")
 
 
+async def favicon(request):
+    return web.FileResponse(os.path.join(BASE_DIR, "favicon.svg"),
+                            headers={"Content-Type": "image/svg+xml", "Cache-Control": "public, max-age=604800"})
+
+
+async def robots(request):
+    return web.Response(text="User-agent: *\nAllow: /\n", content_type="text/plain")
+
+
 async def health(request):
     return web.Response(text="OK", status=200)
 
@@ -148,6 +157,9 @@ def main():
     app.router.add_get("/commands.html", _redirect("/#commands"))
     app.router.add_get("/terms.html", terms)
     app.router.add_get("/privacy.html", privacy)
+    app.router.add_get("/favicon.svg", favicon)
+    app.router.add_get("/favicon.ico", favicon)
+    app.router.add_get("/robots.txt", robots)
     app.router.add_get("/health", health)
     port = int(os.getenv("PORT", 8080))
     web.run_app(app, host="0.0.0.0", port=port)
