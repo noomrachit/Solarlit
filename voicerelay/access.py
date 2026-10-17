@@ -296,6 +296,16 @@ async def create_pending(guild_id: int, user_id: int, listeners: int, speakers: 
     return PendingResult("created", pid, until)
 
 
+async def counts() -> Optional[tuple]:
+    """(เซิร์ฟที่จ่ายแล้วยังไม่หมดอายุ, สลิปรออนุมัติ) — ใช้แค่เขียนสรุปลงบันทึก; ต่อฐานข้อมูลไม่ได้ = None"""
+    pool = await _get_pool()
+    if pool is None:
+        return None
+    paid = await pool.fetchval("SELECT count(*) FROM relay_access WHERE paid_until > now()")
+    pending = await pool.fetchval("SELECT count(*) FROM relay_pending WHERE status = 'pending'")
+    return int(paid), int(pending)
+
+
 async def get_pending(pending_id: int):
     pool = await _get_pool()
     if pool is None:

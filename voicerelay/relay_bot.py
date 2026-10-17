@@ -1253,6 +1253,33 @@ async def pending_reminder_loop(unit: "RelayUnit"):
         await asyncio.sleep(3600)
 
 
+async def stats_loop(units: list, pool: SpeakerPool):
+    """
+    ทุก 5 นาที: เขียนสรุปหนึ่งบรรทัดลงบันทึก ให้หน้าแดชบอร์ดอ่านจากบันทึกของเรลเวย์
+    อ่านอย่างเดียว ไม่แตะสถานะของบอท — ถ้านับพลาดก็ข้ามรอบนั้น บอททำงานต่อตามปกติ
+    """
+    await asyncio.sleep(60)
+    while True:
+        try:
+            bots = [u.bot for u in units] + list(pool.speaker_bots)
+            online = sum(1 for b in bots if b.is_ready())
+            relaying = sum(1 for u in units if u.relay_active) + len(pool.owner)
+            servers = len({g.id for b in bots if b.is_ready() for g in b.guilds})
+            paid = pending = "-"
+            if access.is_enabled():
+                try:
+                    c = await asyncio.wait_for(access.counts(), timeout=10)
+                    if c:
+                        paid, pending = c
+                except Exception as e:
+                    log.warning(f"stats: นับลูกค้าไม่ได้: {e}")
+            log.info(f"STATS bots_online={online} bots_total={len(bots)} relaying={relaying} "
+                     f"servers={servers} paid={paid} pending={pending}")
+        except Exception:
+            log.exception("stats_loop ผิดพลาด")
+        await asyncio.sleep(300)
+
+
 async def _start_bot_safe(bot: commands.Bot, token: str, label: str):
     """
     login บอทแต่ละตัวแบบแยกอิสระ ถ้าตัวไหน token ผิด/login ไม่ผ่าน
@@ -1350,6 +1377,7 @@ async def main():
 
         asyncio.create_task(mixer_pump(units, pool))
         asyncio.create_task(pending_reminder_loop(units[0]))
+        asyncio.create_task(stats_loop(units, pool))
         asyncio.create_task(start_health_server())
 
         tasks = [_start_bot_safe(unit.bot, unit.token, unit.name) for unit in units]
