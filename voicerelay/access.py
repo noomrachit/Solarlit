@@ -414,3 +414,63 @@ async def list_all() -> list:
 
 def monthly_price(access: Access) -> int:
     return (access.listeners + access.speakers) * PRICE_PER_BOT
+
+
+# ── ห้องสถานะเรียลไทม์ (/relay healthchannel) — เก็บถาวร รีสตาร์ทแล้วไม่หาย ──
+_health_table_ready = False
+
+
+async def _health_pool():
+    global _health_table_ready
+    pool = await _get_pool()
+    if pool is None:
+        return None
+    if not _health_table_ready:
+        await pool.execute(
+            """
+            CREATE TABLE IF NOT EXISTS relay_health_channel (
+                guild_id    BIGINT PRIMARY KEY,
+                channel_id  BIGINT NOT NULL,
+                message_id  BIGINT
+            )
+            """
+        )
+        _health_table_ready = True
+    return pool
+
+
+async def set_health_channel(guild_id: int, channel_id: int) -> bool:
+    pool = await _health_pool()
+    if pool is None:
+        return False
+    await pool.execute(
+        """
+        INSERT INTO relay_health_channel (guild_id, channel_id, message_id) VALUES ($1, $2, NULL)
+        ON CONFLICT (guild_id) DO UPDATE SET channel_id = EXCLUDED.channel_id, message_id = NULL
+        """,
+        guild_id, channel_id,
+    )
+    return True
+
+
+async def set_health_message(guild_id: int, message_id: int) -> None:
+    pool = await _health_pool()
+    if pool is None:
+        return
+    await pool.execute("UPDATE relay_health_channel SET message_id = $2 WHERE guild_id = $1", guild_id, message_id)
+
+
+async def clear_health_channel(guild_id: int) -> bool:
+    pool = await _health_pool()
+    if pool is None:
+        return False
+    r = await pool.execute("DELETE FROM relay_health_channel WHERE guild_id = $1", guild_id)
+    return r.endswith("1")
+
+
+async def list_health_channels() -> list:
+    pool = await _health_pool()
+    if pool is None:
+        return []
+    rows = await pool.fetch("SELECT guild_id, channel_id, message_id FROM relay_health_channel")
+    return [(r["guild_id"], r["channel_id"], r["message_id"]) for r in rows]

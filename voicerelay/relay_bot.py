@@ -90,6 +90,17 @@ log.info(f"พบบอทพูดทั้งหมด {len(SPEAKER_TOKENS)} �
 log.info(f"หัวหน้าที่จะรัน: 1 ตัว" + (" + ตัวที่ 2" if LISTENER_TOKEN_2 else " (ไม่ได้ตั้งค่า LISTENER_BOT_TOKEN_2)"))
 
 
+# ── ตัวเฝ้าเสียง: ตัวนับปัญหาเสียง (รีเซ็ตทุกนาทีหลังเขียนบันทึก HEALTH) ──
+HEALTH = {"underrun": 0, "overflow": 0, "decode_err": 0, "pump_late": 0, "reconnect": 0}
+RECONNECT_EVENTS: list = []  # (guild_id, ข้อความ) ที่เกิดในนาทีนี้ — ส่งเป็นประกาศในห้องสถานะ
+_HEALTH_LOCK = threading.Lock()
+
+
+def health_inc(key: str, n: int = 1):
+    with _HEALTH_LOCK:
+        HEALTH[key] = HEALTH.get(key, 0) + n
+
+
 def _patch_voice_recv_resilience():
     """
     แพตช์ไลบรารี discord-ext-voice-recv ให้ทนต่อ error 'corrupted stream' จาก opus decode
@@ -112,6 +123,7 @@ def _patch_voice_recv_resilience():
                 try:
                     return original_process(self, packet, *args, **kwargs)
                 except Exception as e:
+                    health_inc("decode_err")
                     log.warning(f"ข้าม packet เสียงที่ decode ไม่ได้ (ไม่ล่มทั้งระบบ): {e}")
                     return None
 
@@ -289,6 +301,8 @@ class FrameBuffer:
 
     def put(self, frame: bytes):
         with self._lock:
+            if len(self._q) == self.MAXLEN:
+                health_inc("overflow")  # ค้างเกิน 300ms ต้องทิ้งเฟรมเก่า = ดีเลย์/หน่วง
             self._q.append(frame)
 
     def get(self) -> Optional[bytes]:
@@ -299,6 +313,7 @@ class FrameBuffer:
                 self._playing = True
             if not self._q:
                 self._playing = False
+                health_inc("underrun")  # กำลังเล่นแล้วเฟรมไม่มา = เสียงขาด/แตก
                 return None
             return self._q.popleft()
 
@@ -323,6 +338,38 @@ class QueueAudioSource(discord.AudioSource):
 
     def is_opus(self) -> bool:
         return False
+
+
+def _member_voice_channel(guild, user_id: int):
+    """ห้องเสียงที่คนนี้อยู่ตอนนี้ในเซิร์ฟนี้ (None = ไม่ได้อยู่ห้องเสียง)"""
+    if guild is None:
+        return None
+    for ch in list(guild.voice_channels) + list(guild.stage_channels):
+        if any(m.id == user_id for m in ch.members):
+            return ch
+    return None
+
+
+def follow_target(bot, binding: dict):
+    """
+    ห้องที่บอทควรอยู่ตอนนี้ตามการผูก:
+    - ล็อกคน (user_id): ไปห้องที่คนนั้นอยู่ (ถ้าระบุ channel_id ต้องเป็นห้องนั้นเท่านั้น) / คนนั้นไม่อยู่ = None
+    - ผูกห้อง (channel_id อย่างเดียว): ห้องนั้น ถ้ามีคนอยู่
+    """
+    if not binding:
+        return None
+    uid = binding.get("user_id")
+    cid = binding.get("channel_id")
+    if uid:
+        ch = _member_voice_channel(bot.get_guild(binding.get("guild_id") or 0), uid)
+        if ch is None or (cid and ch.id != cid):
+            return None
+        return ch
+    if cid:
+        ch = bot.get_channel(cid)
+        if ch is not None and _count_humans(ch) > 0:
+            return ch
+    return None
 
 
 def _count_humans(channel) -> int:
@@ -697,6 +744,7 @@ class RelayUnit:
         @has_relay_perms()
         @app_commands.describe(channel="ห้องหลักที่จะผูกไว้ (Voice หรือ Stage Channel) — เข้าเมื่อมีคนเข้าห้อง ออกเมื่อห้องว่าง")
         async def relay_bindlistener(interaction: discord.Interaction, channel: Union[discord.VoiceChannel, discord.StageChannel]):
+            unit.listener_binding.clear()
             unit.listener_binding["channel_id"] = channel.id
             await interaction.response.send_message(
                 f"🔗 ผูก {unit.name} กับห้อง {channel.mention} แล้ว\n"
@@ -863,6 +911,7 @@ class RelayUnit:
                 pool.release_bind(idx0, unit)
             unit.speaker_bindings.clear()
 
+            unit.listener_binding.clear()
             unit.listener_binding["channel_id"] = source.id
             lines = [f"🔗 {unit.name} ผูกกับห้องหลัก {source.mention}"]
             if _count_humans(source) > 0 and not unit.relay_active:
@@ -943,24 +992,145 @@ class RelayUnit:
                     lines.append(f"✅ ลูกน้อง {what} สำเร็จ {done} ตัว" + (f" · ไม่สำเร็จ {fail} ตัว (ไม่มีสิทธิ์ Change Nickname)" if fail else ""))
             await interaction.followup.send("\n".join(lines), ephemeral=True)
 
+        @relay_group.command(name="followleader", description="หัวหน้าล็อกตามคนที่เลือก: คนนั้นเข้าห้องไหน หัวหน้าเข้าไปฟังห้องนั้น ออกเมื่อคนนั้นออก")
+        @has_relay_perms()
+        @app_commands.describe(
+            user="คนที่จะให้หัวหน้าตาม (เช่น คนสั่งวอร์)",
+            channel="จำกัดเฉพาะห้องนี้ (ไม่ใส่ = ตามไปทุกห้องที่คนนั้นเข้า)",
+        )
+        async def relay_followleader(interaction: discord.Interaction, user: discord.Member,
+                                     channel: Optional[Union[discord.VoiceChannel, discord.StageChannel]] = None):
+            if user.bot:
+                return await interaction.response.send_message("❌ เลือกคน ไม่ใช่บอท", ephemeral=True)
+            await interaction.response.defer(ephemeral=True)
+            unit.listener_binding.clear()
+            unit.listener_binding.update(user_id=user.id, guild_id=interaction.guild.id,
+                                         channel_id=channel.id if channel else None)
+            target = follow_target(unit.bot, unit.listener_binding)
+            note = ""
+            if target is not None:
+                cur = _vc_of(unit.bot, interaction.guild.id)
+                if not (_vc_ok(cur) and cur.channel.id == target.id):
+                    if unit.relay_active:
+                        await unit.stop_listening()
+                    try:
+                        await unit.start_listening(target)
+                        note = f"\n🎧 {user.display_name} อยู่ใน {target.mention} ตอนนี้ — เข้าแล้ว"
+                    except Exception as e:
+                        note = f"\n⚠️ เข้าห้องตอนนี้ไม่ได้: {e}"
+            where = f"เฉพาะห้อง {channel.mention}" if channel else "ทุกห้องที่เขาเข้า"
+            await interaction.followup.send(
+                f"🔒 {unit.name} ล็อกตาม {user.mention} ({where})\n"
+                f"เขาเข้าห้อง → หัวหน้าเข้าตาม / ย้ายห้อง → ย้ายตาม / ออก → หัวหน้าออก{note}\n"
+                f"ยกเลิกด้วย `/relay unbind`", ephemeral=True)
+
+        @relay_group.command(name="followspeaker", description="ลูกน้องล็อกตามคนที่เลือก: คนนั้นเข้าห้องไหน ลูกน้องเข้าไปเล่นเสียงห้องนั้น")
+        @has_relay_perms()
+        @app_commands.describe(
+            user="คนที่จะให้ลูกน้องตาม",
+            channel="จำกัดเฉพาะห้องนี้ (ไม่ใส่ = ตามไปทุกห้องที่คนนั้นเข้า)",
+        )
+        async def relay_followspeaker(interaction: discord.Interaction, user: discord.Member,
+                                      channel: Optional[discord.VoiceChannel] = None):
+            if user.bot:
+                return await interaction.response.send_message("❌ เลือกคน ไม่ใช่บอท", ephemeral=True)
+            await interaction.response.defer(ephemeral=True)
+            # ตามคนเดิมอยู่แล้ว = ใช้ลูกน้องตัวเดิม
+            idx0 = next((i for i, b in unit.speaker_bindings.items() if b.get("user_id") == user.id), None)
+            if idx0 is None:
+                idx0 = next((i for i in range(len(pool.speaker_bots)) if pool.bind_owner.get(i) is None), None)
+                if idx0 is None or pool.try_bind(idx0, unit) is not None:
+                    return await interaction.followup.send(f"❌ ลูกน้องว่างไม่พอ (มี {len(pool.speaker_bots)} ตัว)", ephemeral=True)
+            binding = {"user_id": user.id, "guild_id": interaction.guild.id,
+                       "channel_id": channel.id if channel else None}
+            unit.speaker_bindings[idx0] = binding
+            note = ""
+            target = follow_target(unit.bot, binding)
+            if target is not None and unit.relay_active:
+                if pool.owner.get(idx0) is unit and pool.channel_map.get(idx0) != target.id:
+                    await unit.stop_speaking(idx0)
+                if pool.owner.get(idx0) is None:
+                    try:
+                        if await unit.start_speaking_at(idx0, target):
+                            note = f"\n🔊 {user.display_name} อยู่ใน {target.mention} ตอนนี้ — เข้าแล้ว"
+                    except Exception as e:
+                        note = f"\n⚠️ เข้าห้องตอนนี้ไม่ได้: {e}"
+            elif target is not None:
+                note = "\n⏳ หัวหน้ายังไม่ได้ฟังห้องหลัก ลูกน้องจะเข้าเมื่อหัวหน้าเริ่มฟัง"
+            where = f"เฉพาะห้อง {channel.mention}" if channel else "ทุกห้องที่เขาเข้า"
+            await interaction.followup.send(
+                f"🔒 ลูกน้อง {idx0 + 1} ล็อกตาม {user.mention} ({where})\n"
+                f"เขาเข้าห้อง → ลูกน้องเข้าเล่นเสียง / ย้ายห้อง → ย้ายตาม / ออก → ลูกน้องออก{note}\n"
+                f"ยกเลิกด้วย `/relay unbind`", ephemeral=True)
+
         @relay_group.command(name="unbind", description="ยกเลิกการผูกอัตโนมัติทั้งหมดของหัวหน้าตัวนี้ (บอทจะไม่ตามเข้า-ออกห้องไหนอีก)")
         @has_relay_perms()
         async def relay_unbind(interaction: discord.Interaction):
+            unit.listener_binding.clear()
             unit.listener_binding["channel_id"] = None
             for idx0 in list(unit.speaker_bindings.keys()):
                 pool.release_bind(idx0, unit)
             unit.speaker_bindings.clear()
             await interaction.response.send_message("🔓 ยกเลิกการผูกอัตโนมัติทั้งหมดแล้ว (ยังใช้คำสั่งแบบ manual ได้ปกติ)", ephemeral=True)
 
+        @relay_group.command(name="health", description="ตัวเฝ้าเสียง: เช็คเสียงขาด/ดีเลย์/ปิง/บอทหลุด ในนาทีล่าสุด")
+        async def relay_health(interaction: discord.Interaction):
+            h = LAST_HEALTH
+            if not h:
+                return await interaction.response.send_message("⏳ ยังไม่มีข้อมูล รอประมาณ 1-2 นาทีหลังบอทเริ่มทำงาน", ephemeral=True)
+            def mark(v, lim):
+                return "🟢" if v <= lim else "🔴"
+            lines = [
+                f"🩺 สุขภาพเสียง (1 นาทีล่าสุด, <t:{int(h['at'])}:R>)",
+                f"{mark(h['underrun'], 30)} เสียงขาด/แตก: {h['underrun']} ครั้ง",
+                f"{mark(h['overflow'], 30)} เสียงค้าง/หน่วง (ทิ้งเฟรม): {h['overflow']} ครั้ง",
+                f"{mark(h['decode_err'], 20)} แพ็กเก็ตเสียจากห้องหลัก: {h['decode_err']} ครั้ง",
+                f"{mark(h['pump_late'], 10)} เครื่องประมวลผลไม่ทัน: {h['pump_late']} ครั้ง",
+                f"{mark(h['max_ping_ms'], 250)} ปิงเสียงสูงสุด: {h['max_ping_ms']} ms",
+                f"🔁 บอทหลุดแล้วต่อใหม่เอง: {h['reconnect']} ครั้ง",
+            ]
+            if h["decode_err"] > 20 or h["max_ping_ms"] > 250:
+                lines.append("\n💡 แพ็กเก็ตเสีย/ปิงสูง มักเกิดจากภูมิภาคห้องไกล — ตั้งห้องเป็น Singapore")
+            await interaction.response.send_message("\n".join(lines), ephemeral=True)
+
+        @relay_group.command(name="healthchannel", description="ตั้งห้องข้อความเป็นห้องสถานะเสียงเรียลไทม์ + ประกาศเตือนเมื่อเสียงมีปัญหา/บอทหลุด")
+        @has_relay_perms()
+        @app_commands.describe(channel="ห้องข้อความที่จะให้บอทโพสต์สถานะ (แนะนำห้องที่ปิดไม่ให้คนพิมพ์)")
+        async def relay_healthchannel(interaction: discord.Interaction, channel: discord.TextChannel):
+            if not access.is_enabled():
+                return await interaction.response.send_message("❌ ยังไม่ได้ต่อฐานข้อมูล ตั้งห้องสถานะไม่ได้", ephemeral=True)
+            perms = channel.permissions_for(interaction.guild.me)
+            if not (perms.view_channel and perms.send_messages and perms.embed_links):
+                return await interaction.response.send_message(
+                    f"❌ {unit.name} ไม่มีสิทธิ์ ดูห้อง / ส่งข้อความ / แนบลิงก์ ใน {channel.mention}", ephemeral=True)
+            await interaction.response.defer(ephemeral=True)
+            await access.set_health_channel(interaction.guild.id, channel.id)
+            sent = await channel.send(embed=build_health_embed(units_ref(), pool, interaction.guild, False))
+            await access.set_health_message(interaction.guild.id, sent.id)
+            await interaction.followup.send(
+                f"✅ ตั้ง {channel.mention} เป็นห้องสถานะแล้ว — อัปเดตทุก 1 นาที และประกาศเตือนเมื่อเสียงมีปัญหา/บอทหลุด",
+                ephemeral=True)
+
+        @relay_group.command(name="healthoff", description="ยกเลิกห้องสถานะเสียงเรียลไทม์ของเซิร์ฟนี้")
+        @has_relay_perms()
+        async def relay_healthoff(interaction: discord.Interaction):
+            ok = await access.clear_health_channel(interaction.guild.id)
+            await interaction.response.send_message("🔕 ยกเลิกห้องสถานะแล้ว" if ok else "เซิร์ฟนี้ยังไม่ได้ตั้งห้องสถานะ", ephemeral=True)
+
         @relay_group.command(name="status", description="เช็คสถานะการถ่ายทอดเสียงของหัวหน้าตัวนี้ตอนนี้")
         async def relay_status(interaction: discord.Interaction):
             lines = [f"— {unit.name} —"]
 
-            if unit.listener_binding["channel_id"]:
+            if unit.listener_binding.get("user_id"):
+                lines.append(f"🔒 บอทฟัง ล็อกตาม <@{unit.listener_binding['user_id']}>")
+            elif unit.listener_binding.get("channel_id"):
                 ch = interaction.guild.get_channel(unit.listener_binding["channel_id"])
                 lines.append(f"🔗 บอทฟัง ผูกกับห้อง {ch.mention if ch else '?'} (เข้า-ออกตามคนในห้อง)")
 
             for idx0, binding in unit.speaker_bindings.items():
+                if binding.get("user_id"):
+                    lines.append(f"🔒 บอทพูดตัวที่ {idx0 + 1} ล็อกตาม <@{binding['user_id']}>")
+                    continue
                 ch = interaction.guild.get_channel(binding["channel_id"])
                 lines.append(f"🔗 บอทพูดตัวที่ {idx0 + 1} ผูกกับห้อง {ch.mention if ch else '?'} (เข้า-ออกตามคนในห้อง)")
 
@@ -1236,7 +1406,26 @@ class RelayUnit:
             """บอทฟัง: เข้าเมื่อมีคนแรกเข้าห้องที่ผูกไว้ / ออกเมื่อห้องว่าง (ตาม /relay bindlistener)"""
             if member.bot:
                 return
-            bound_channel_id = unit.listener_binding["channel_id"]
+            uid = unit.listener_binding.get("user_id")
+            if uid:
+                # ล็อกคน: สนใจแค่คนนี้ ตามเข้า/ย้าย/ออกตามเขา
+                if member.id != uid:
+                    return
+                target = follow_target(unit.bot, unit.listener_binding)
+                cur = _vc_of(unit.bot, unit.guild_id)
+                cur_id = cur.channel.id if _vc_ok(cur) else None
+                if target is None:
+                    if unit.relay_active:
+                        await unit.stop_listening()
+                elif target.id != cur_id:
+                    if unit.relay_active:
+                        await unit.stop_listening()
+                    try:
+                        await unit.start_listening(target)
+                    except Exception as e:
+                        log.error(f"[{unit.name}] ตามคนเข้าห้องไม่สำเร็จ: {e}")
+                return
+            bound_channel_id = unit.listener_binding.get("channel_id")
             if bound_channel_id is None:
                 return
 
@@ -1280,6 +1469,24 @@ def make_speaker_voice_handler(index: int, pool: SpeakerPool):
         binding = owner.speaker_bindings.get(index)
         if not binding:
             return
+        uid = binding.get("user_id")
+        if uid:
+            if member.id != uid:
+                return
+            target = follow_target(owner.bot, binding)
+            cur_id = pool.channel_map.get(index) if pool.owner.get(index) is owner else None
+            if target is None:
+                if cur_id is not None:
+                    await owner.stop_speaking(index)
+            elif target.id != cur_id:
+                if cur_id is not None:
+                    await owner.stop_speaking(index)
+                if pool.owner.get(index) is None:
+                    try:
+                        await owner.start_speaking_at(index, target)
+                    except Exception as e:
+                        log.error(f"[{owner.name}/Speaker {index + 1}] ตามคนเข้าห้องไม่สำเร็จ: {e}")
+            return
         bound_channel_id = binding["channel_id"]
 
         before_id = before.channel.id if before.channel else None
@@ -1319,6 +1526,211 @@ async def pending_reminder_loop(unit: "RelayUnit"):
         except Exception:
             log.exception("pending_reminder_loop ผิดพลาด")
         await asyncio.sleep(3600)
+
+
+def _vc_of(bot, guild_id):
+    g = bot.get_guild(guild_id) if guild_id else None
+    return g.voice_client if g else None
+
+
+def _vc_ok(vc) -> bool:
+    return vc is not None and vc.is_connected()
+
+
+async def watchdog_loop(units: list, pool: SpeakerPool):
+    """
+    ตัวเฝ้าเสียง ทุก 10 วินาที:
+    - บอทหลุด: หัวหน้า/ลูกน้องที่ควรอยู่ในห้องแต่หลุดไป -> ต่อใหม่เอง (ห้องที่ผูกไว้และยังมีคนอยู่)
+    - ห้องที่ผูกไว้มีคนแต่บอทไม่อยู่ (เช่นพลาด event ตอนรีสตาร์ท) -> เข้าให้
+    - ทุก 60 วินาที เขียนบันทึก HEALTH (เสียงขาด/ล้น/แพ็กเก็ตเสีย/ปิงสูง) และเตือนถ้าเกินเกณฑ์
+    """
+    await asyncio.sleep(30)
+    tick = 0
+    while True:
+        try:
+            for unit in units:
+                bind_id = unit.listener_binding.get("channel_id")
+                # หัวหน้า: คิดว่าฟังอยู่ แต่ไม่ได้ต่อจริง = หลุด
+                if unit.relay_active and not _vc_ok(_vc_of(unit.bot, unit.guild_id)):
+                    log.warning(f"[ตัวเฝ้า] {unit.name} หลุดจากห้องหลัก -> ต่อใหม่")
+                    RECONNECT_EVENTS.append((unit.guild_id, f"{unit.name} หลุดจากห้องหลัก — กำลังต่อใหม่"))
+                    old = _vc_of(unit.bot, unit.guild_id)
+                    unit.relay_active = False
+                    if old is not None:
+                        try:
+                            await old.disconnect(force=True)
+                        except Exception:
+                            pass
+                    health_inc("reconnect")
+                # หัวหน้า: ห้องที่ผูกไว้มีคน (หรือคนที่ล็อกไว้อยู่ในห้อง) แต่ไม่ได้ฟัง -> เข้า
+                if not unit.relay_active and (bind_id or unit.listener_binding.get("user_id")):
+                    ch = follow_target(unit.bot, unit.listener_binding)
+                    if ch is not None:
+                        try:
+                            await unit.start_listening(ch)
+                        except Exception as e:
+                            log.warning(f"[ตัวเฝ้า] {unit.name} เข้าห้องหลักไม่สำเร็จ: {e}")
+
+                # ลูกน้องของหัวหน้าตัวนี้
+                for idx in list(pool.indices_for(unit)):
+                    if idx not in pool.channel_map:
+                        continue  # กำลังต่ออยู่ (ยังไม่เสร็จ) อย่าเพิ่งตัดสินว่าหลุด
+                    sb = pool.speaker_bots[idx]
+                    if not _vc_ok(_vc_of(sb, pool.guild_map.get(idx))):
+                        log.warning(f"[ตัวเฝ้า] ลูกน้อง {idx + 1} หลุดจากห้อง -> ต่อใหม่")
+                        RECONNECT_EVENTS.append((pool.guild_map.get(idx), f"ลูกน้อง {idx + 1} หลุดจากห้อง — กำลังต่อใหม่"))
+                        old = _vc_of(sb, pool.guild_map.get(idx))
+                        if old is not None:
+                            try:
+                                await old.disconnect(force=True)
+                            except Exception:
+                                pass
+                        pool.release(idx)
+                        health_inc("reconnect")
+                if unit.relay_active:
+                    for idx0, b in list(unit.speaker_bindings.items()):
+                        if pool.owner.get(idx0) is not None:
+                            continue
+                        ch = follow_target(unit.bot, b)
+                        if ch is not None:
+                            try:
+                                await unit.start_speaking_at(idx0, ch)
+                            except Exception as e:
+                                log.warning(f"[ตัวเฝ้า] ลูกน้อง {idx0 + 1} เข้าห้องไม่สำเร็จ: {e}")
+
+            tick += 1
+            if tick % 6 == 0:
+                pings = []
+                for unit in units:
+                    vc = _vc_of(unit.bot, unit.guild_id)
+                    if _vc_ok(vc):
+                        pings.append(vc.average_latency)
+                for idx, gid in list(pool.guild_map.items()):
+                    vc = _vc_of(pool.speaker_bots[idx], gid)
+                    if _vc_ok(vc):
+                        pings.append(vc.average_latency)
+                pings = [p for p in pings if p and p != float("inf")]
+                max_ping = int(max(pings) * 1000) if pings else 0
+                with _HEALTH_LOCK:
+                    snap = dict(HEALTH)
+                    for k in HEALTH:
+                        HEALTH[k] = 0
+                LAST_HEALTH.clear()
+                LAST_HEALTH.update(snap, max_ping_ms=max_ping, at=time.time())
+                line = " ".join(f"{k}={v}" for k, v in snap.items())
+                bad = (snap["underrun"] > 30 or snap["overflow"] > 30 or snap["decode_err"] > 20
+                       or snap["pump_late"] > 10 or max_ping > 250)
+                (log.warning if bad else log.info)(f"HEALTH {line} max_ping_ms={max_ping}"
+                                                   + (" ⚠️ เสียงมีปัญหา" if bad else ""))
+                events = list(RECONNECT_EVENTS)
+                RECONNECT_EVENTS.clear()
+                try:
+                    await update_health_channels(units, pool, bad, events)
+                except Exception:
+                    log.exception("อัปเดตห้องสถานะไม่สำเร็จ")
+        except Exception:
+            log.exception("watchdog_loop ผิดพลาด")
+        await asyncio.sleep(10)
+
+
+LAST_HEALTH: dict = {}
+ALL_UNITS: list = []
+
+
+def units_ref() -> list:
+    return ALL_UNITS
+_LAST_ALERT: dict = {}  # guild_id -> เวลาประกาศเตือนเสียงล่าสุด (กันสแปม)
+ALERT_COOLDOWN = 600
+
+
+def _health_lines(h: dict) -> list:
+    def mark(v, lim):
+        return "🟢" if v <= lim else "🔴"
+    return [
+        f"{mark(h['underrun'], 30)} เสียงขาด/แตก: **{h['underrun']}** ครั้ง",
+        f"{mark(h['overflow'], 30)} เสียงค้าง/หน่วง: **{h['overflow']}** ครั้ง",
+        f"{mark(h['decode_err'], 20)} แพ็กเก็ตเสียจากห้องหลัก: **{h['decode_err']}** ครั้ง",
+        f"{mark(h['pump_late'], 10)} เครื่องประมวลผลไม่ทัน: **{h['pump_late']}** ครั้ง",
+        f"{mark(h['max_ping_ms'], 250)} ปิงเสียงสูงสุด: **{h['max_ping_ms']}** ms",
+        f"🔁 บอทหลุดแล้วต่อใหม่เอง: **{h['reconnect']}** ครั้ง",
+    ]
+
+
+def _guild_relay_lines(units: list, pool: SpeakerPool, guild) -> list:
+    lines = []
+    for unit in units:
+        vc = _vc_of(unit.bot, guild.id)
+        if _vc_ok(vc):
+            lines.append(f"🎧 {unit.name} → {vc.channel.mention}")
+    for idx, gid in sorted(pool.guild_map.items()):
+        if gid != guild.id:
+            continue
+        vc = _vc_of(pool.speaker_bots[idx], gid)
+        ch = guild.get_channel(pool.channel_map.get(idx))
+        state = "🔊" if _vc_ok(vc) else "⚠️ หลุด"
+        lines.append(f"{state} ลูกน้อง {idx + 1} → {ch.mention if ch else '?'}")
+    return lines or ["💤 ตอนนี้ไม่มีบอทอยู่ในห้องเสียง"]
+
+
+def build_health_embed(units: list, pool: SpeakerPool, guild, bad: bool) -> discord.Embed:
+    h = LAST_HEALTH
+    e = discord.Embed(
+        title="🩺 สถานะ Voice Relay (เรียลไทม์)",
+        color=discord.Color.red() if bad else discord.Color.green(),
+        description=("⚠️ **เสียงมีปัญหาในนาทีล่าสุด**" if bad else "✅ เสียงปกติ"),
+    )
+    e.add_field(name="บอทในเซิร์ฟนี้", value="\n".join(_guild_relay_lines(units, pool, guild))[:1024], inline=False)
+    if h:
+        e.add_field(name="สุขภาพเสียง (1 นาทีล่าสุด)", value="\n".join(_health_lines(h)), inline=False)
+    e.add_field(name="อัปเดตล่าสุด", value=f"<t:{int(time.time())}:R> · อัปเดตทุก 1 นาที", inline=False)
+    return e
+
+
+async def update_health_channels(units: list, pool: SpeakerPool, bad: bool, events: list):
+    """แก้ข้อความสถานะเดิมในห้องที่ตั้งไว้ (เรียลไทม์) + ประกาศแยกเมื่อเสียงมีปัญหา/บอทหลุด"""
+    if not access.is_enabled():
+        return
+    rows = await access.list_health_channels()
+    bot = units[0].bot
+    for guild_id, channel_id, message_id in rows:
+        ch = None
+        for u in units:
+            ch = u.bot.get_channel(channel_id)
+            if ch is not None:
+                bot = u.bot
+                break
+        if ch is None:
+            continue
+        embed = build_health_embed(units, pool, ch.guild, bad)
+        msg = None
+        if message_id:
+            try:
+                msg = ch.get_partial_message(message_id)
+                await msg.edit(embed=embed)
+            except discord.NotFound:
+                msg = None
+            except discord.Forbidden:
+                log.warning(f"ห้องสถานะ {channel_id}: ไม่มีสิทธิ์แก้ข้อความ")
+                continue
+        if msg is None:
+            try:
+                sent = await ch.send(embed=embed)
+                await access.set_health_message(guild_id, sent.id)
+            except discord.Forbidden:
+                log.warning(f"ห้องสถานะ {channel_id}: ไม่มีสิทธิ์ส่งข้อความ")
+                continue
+
+        notes = [t for g, t in events if g == guild_id]
+        now = time.time()
+        if bad and now - _LAST_ALERT.get(guild_id, 0) > ALERT_COOLDOWN:
+            _LAST_ALERT[guild_id] = now
+            notes.append("เสียงมีปัญหาในนาทีล่าสุด — ดูรายละเอียดในข้อความสถานะด้านบน")
+        if notes:
+            try:
+                await ch.send("📢 **แจ้งเตือนเสียง**\n" + "\n".join(f"• {t}" for t in notes),
+                              delete_after=3600)
+            except Exception:
+                pass
 
 
 async def stats_loop(units: list, pool: SpeakerPool):
@@ -1378,6 +1790,8 @@ async def mixer_pump(units: list, pool: SpeakerPool):
             await asyncio.sleep(delay)
         else:
             # ตกจังหวะไปมาก (เช่นเครื่องช้าตอนนั้น) รีเซ็ต baseline กันสะสม drift ยาวๆ ต่อเนื่อง
+            if delay < -0.04:
+                health_inc("pump_late")
             next_tick = loop.time()
 
         for unit in units:
@@ -1429,6 +1843,7 @@ async def main():
     units = [RelayUnit("หัวหน้า", LISTENER_TOKEN, pool)]
     if LISTENER_TOKEN_2:
         units.append(RelayUnit("หัวหน้า 2", LISTENER_TOKEN_2, pool, unit_no=2))
+    ALL_UNITS.extend(units)
 
     async with AsyncExitStack() as stack:
         for unit in units:
@@ -1439,6 +1854,7 @@ async def main():
         asyncio.create_task(mixer_pump(units, pool))
         asyncio.create_task(pending_reminder_loop(units[0]))
         asyncio.create_task(stats_loop(units, pool))
+        asyncio.create_task(watchdog_loop(units, pool))
         asyncio.create_task(start_health_server())
 
         tasks = [_start_bot_safe(unit.bot, unit.token, unit.name) for unit in units]
