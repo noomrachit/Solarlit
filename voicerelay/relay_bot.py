@@ -38,7 +38,8 @@ import asyncio
 import logging
 import time
 import functools
-from collections import defaultdict
+import threading
+from collections import defaultdict, deque
 from contextlib import AsyncExitStack
 from io import BytesIO
 from datetime import timedelta, timezone
@@ -184,22 +185,39 @@ FRAME_BYTES = 3840  # เฟรมเสียง 20ms ที่ 48kHz, 16-bit, 
 class Mixer:
     """ตัวผสมเสียง (Mixer): รวมเสียงทุกคนที่พูดพร้อมกันในห้องหลักให้กลายเป็นเฟรมเดียว — 1 instance ต่อ 1 RelayUnit"""
 
+    # กันเสียงแตก/ขาดๆ หายๆ: แพ็กเก็ตจาก Discord มาไม่สม่ำเสมอ (มาเป็นก้อน) ถ้าดึงทันทีที่มี 1 เฟรม
+    # พอแพ็กเก็ตถัดไปมาช้านิดเดียว เฟรมนั้นจะกลายเป็นความเงียบแทรกกลางคำพูด = เสียงแตก
+    # จึงรอให้มีสำรองก่อน PREFILL เฟรม (60ms) ค่อยเริ่มดึง และตัดส่วนเกิน MAX เฟรม กันดีเลย์สะสม
+    PREFILL_FRAMES = 3
+    MAX_FRAMES = 12
+
     def __init__(self):
         self.buffers: dict = defaultdict(bytearray)
+        self.primed: set = set()
 
     def feed(self, user_id: int, pcm: bytes):
-        self.buffers[user_id].extend(pcm)
+        buf = self.buffers[user_id]
+        buf.extend(pcm)
+        limit = FRAME_BYTES * self.MAX_FRAMES
+        if len(buf) > limit:
+            del buf[:len(buf) - limit]
 
     def pop_frame(self) -> bytes:
         mixed = None
         for uid, buf in list(self.buffers.items()):
+            if uid not in self.primed:
+                if len(buf) < FRAME_BYTES * self.PREFILL_FRAMES:
+                    continue
+                self.primed.add(uid)
             if len(buf) >= FRAME_BYTES:
                 chunk = bytes(buf[:FRAME_BYTES])
                 del buf[:FRAME_BYTES]
                 # ใช้ numpy แทน struct/list loop เดิม เร็วกว่ามาก ลดโอกาสจังหวะเฟรมเพี้ยนจน CPU ตามไม่ทัน
                 samples = np.frombuffer(chunk, dtype=np.int16).astype(np.int32)
                 mixed = samples if mixed is None else mixed + samples
-            if len(buf) == 0:
+            if len(buf) < FRAME_BYTES:
+                # หมดสำรอง (หยุดพูด หรือเน็ตสะดุด) -> กลับไปรอสำรองใหม่ เศษที่ไม่ครบเฟรมทิ้งได้
+                self.primed.discard(uid)
                 del self.buffers[uid]
         if mixed is None:
             return b"\x00" * FRAME_BYTES
@@ -253,17 +271,53 @@ class RelaySink(voice_recv.AudioSink):
         self._last_seen.clear()
 
 
-class QueueAudioSource(discord.AudioSource):
-    """ดึงเฟรมที่ mix แล้วจาก queue เฉพาะของบอทพูดตัวนั้นๆ"""
+class FrameBuffer:
+    """
+    คิวเฟรมเสียงของบอทพูดแต่ละตัว — ปลอดภัยข้ามเธรด (ตัวเล่นเสียงของ discord.py อ่านจากเธรดของมันเอง
+    ส่วน mixer_pump เขียนจาก event loop เดิมใช้ asyncio.Queue ซึ่งไม่ปลอดภัยข้ามเธรด)
+    มีสำรองก่อนเล่น (prefill) กันนาฬิกา 2 ฝั่งเหลื่อมกันจนเกิดช่องเงียบสลับเสียง = เสียงแตก
+    """
+    PREFILL = 3   # 60ms
+    MAXLEN = 15   # 300ms เกินนี้ทิ้งเฟรมเก่าสุด กันดีเลย์สะสม
 
-    def __init__(self, queue: asyncio.Queue):
+    def __init__(self):
+        self._q = deque(maxlen=self.MAXLEN)
+        self._lock = threading.Lock()
+        self._playing = False
+
+    def put(self, frame: bytes):
+        with self._lock:
+            self._q.append(frame)
+
+    def get(self) -> Optional[bytes]:
+        with self._lock:
+            if not self._playing:
+                if len(self._q) < self.PREFILL:
+                    return None
+                self._playing = True
+            if not self._q:
+                self._playing = False
+                return None
+            return self._q.popleft()
+
+    def clear(self):
+        with self._lock:
+            self._q.clear()
+            self._playing = False
+
+
+SILENCE_FRAME = b"\x00" * FRAME_BYTES
+
+
+class QueueAudioSource(discord.AudioSource):
+    """ดึงเฟรมที่ mix แล้วจาก FrameBuffer เฉพาะของบอทพูดตัวนั้นๆ"""
+
+    def __init__(self, queue: "FrameBuffer"):
         self.queue = queue
 
     def read(self) -> bytes:
-        try:
-            return self.queue.get_nowait()
-        except asyncio.QueueEmpty:
-            return b"\x00" * FRAME_BYTES
+        frame = self.queue.get()
+        return SILENCE_FRAME if frame is None else frame
 
     def is_opus(self) -> bool:
         return False
@@ -284,7 +338,7 @@ class SpeakerPool:
 
     def __init__(self, speaker_bots: list):
         self.speaker_bots = speaker_bots
-        self.queues: list = [asyncio.Queue(maxsize=50) for _ in speaker_bots]
+        self.queues: list = [FrameBuffer() for _ in speaker_bots]
         self.owner: dict = {}              # index -> RelayUnit ที่กำลังใช้ index นี้ "สด" อยู่ตอนนี้ (connect อยู่จริง)
         self.channel_map: dict = {}        # index -> channel_id (ไว้โชว์ /relay status)
         self.guild_map: dict = {}          # index -> guild_id (ไว้นับโควต้าลูกน้องต่อเซิร์ฟเวอร์)
@@ -309,12 +363,7 @@ class SpeakerPool:
         self.owner.pop(index, None)
         self.channel_map.pop(index, None)
         self.guild_map.pop(index, None)
-        q = self.queues[index]
-        while not q.empty():
-            try:
-                q.get_nowait()
-            except asyncio.QueueEmpty:
-                break
+        self.queues[index].clear()
 
     def indices_for(self, unit) -> list:
         return [i for i, owner in self.owner.items() if owner is unit]
@@ -1325,15 +1374,8 @@ async def mixer_pump(units: list, pool: SpeakerPool):
             if not my_indices:
                 continue
             for idx in my_indices:
-                q = pool.queues[idx]
-                try:
-                    q.put_nowait(frame)
-                except asyncio.QueueFull:
-                    try:
-                        q.get_nowait()  # ทิ้งเฟรมเก่าสุด กันดีเลย์สะสม
-                    except asyncio.QueueEmpty:
-                        pass
-                    q.put_nowait(frame)
+                # FrameBuffer ทิ้งเฟรมเก่าสุดเองเมื่อเต็ม กันดีเลย์สะสม
+                pool.queues[idx].put(frame)
 
 
 # Health check
