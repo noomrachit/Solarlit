@@ -68,6 +68,8 @@ TH_TZ = timezone(timedelta(hours=7))
 WEBSITE_URL = os.getenv("WEBSITE_URL", "https://website-preview-production-75cb.up.railway.app")
 
 LISTENER_TOKEN = os.getenv("LISTENER_BOT_TOKEN")
+# ภูมิภาคเซิร์ฟเสียงที่บังคับให้ทุกห้องใช้ (ตรงกับที่บอทรันอยู่) กันเสียงอ้อมไปทวีปอื่นจนแตก — ตั้งเป็นค่าว่างเพื่อปิด
+VOICE_REGION = os.getenv("RELAY_VOICE_REGION", "singapore").strip() or None
 LISTENER_TOKEN_2 = os.getenv("LISTENER_BOT_TOKEN_2")  # ไม่ใส่ = รันแค่หัวหน้าตัวเดียว เหมือนเดิม
 
 SPEAKER_TOKENS = []
@@ -330,6 +332,21 @@ def _count_humans(channel) -> int:
     return len([m for m in channel.members if not m.bot])
 
 
+async def ensure_voice_region(channel) -> None:
+    """ตั้งภูมิภาคเสียงของห้องให้ตรง VOICE_REGION ก่อนบอทเข้า (ต้องมีสิทธิ์ Manage Channels — ไม่มีก็ข้าม ไม่ล่ม)"""
+    if VOICE_REGION is None or channel is None:
+        return
+    if getattr(channel, "rtc_region", None) == VOICE_REGION:
+        return
+    try:
+        await channel.edit(rtc_region=VOICE_REGION, reason="Voice Relay: ตั้งภูมิภาคเดียวกันกันเสียงแตก")
+        log.info(f"ตั้งภูมิภาคห้อง {channel.name} เป็น {VOICE_REGION} แล้ว")
+    except discord.Forbidden:
+        log.warning(f"ตั้งภูมิภาคห้อง {channel.name} ไม่ได้: บอทไม่มีสิทธิ์ Manage Channels")
+    except Exception as e:
+        log.warning(f"ตั้งภูมิภาคห้อง {channel.name} ไม่ได้: {e}")
+
+
 class SpeakerPool:
     """
     บอทพูดทั้งหมด (แชร์กันทุก RelayUnit) — จองได้ครั้งละ 1 unit ต่อ 1 index เท่านั้น
@@ -489,6 +506,7 @@ class RelayUnit:
         if acc is None or self.unit_no > acc.listeners:
             log.warning(f"[{self.name}] ไม่เข้าห้องหลักในเซิร์ฟ {channel.guild.id}: ยังไม่ได้เปิดสิทธิ์")
             return
+        await ensure_voice_region(channel)
         listener_vc = await channel.connect(cls=voice_recv.VoiceRecvClient)
         listener_vc.listen(RelaySink(self.mixer, self.role_filter))
         self.relay_active = True
@@ -543,6 +561,7 @@ class RelayUnit:
             self.last_speaking_error = "not_invited"
             return False
 
+        await ensure_voice_region(channel)  # แก้ผ่านหัวหน้า (มักมีสิทธิ์มากกว่าลูกน้อง)
         vc = await target_channel.connect()
         vc.play(QueueAudioSource(self.pool.queues[index]))
         self.pool.channel_map[index] = channel.id
