@@ -1070,6 +1070,29 @@ async def before_check_bookings():
 # timer dict: guild_id → asyncio.Task (1 นาที auto-skip หลังกด "เรียก")
 _call_timers: dict[int, asyncio.Task] = {}  # key = queue scope (guild.id หรือ channel.id ของห้องที่แยกคิว)
 
+# ประกาศ "ถึงคิวแล้ว" ล่าสุดของแต่ละขอบเขตคิว — ให้ค้างในห้องแค่อันเดียว
+_call_announces: dict[int, discord.Message] = {}
+
+
+async def _delete_call_announce(scope: int):
+    """ลบประกาศเรียกคิวอันเก่าของขอบเขตคิวนี้ (ถ้ามี)"""
+    old = _call_announces.pop(scope, None)
+    if old:
+        try:
+            await old.delete()
+        except Exception:
+            pass
+
+
+async def _send_call_announce(interaction: discord.Interaction, scope: int, embed: discord.Embed):
+    """ส่งประกาศเรียกคิวใหม่ และลบอันเก่าทิ้ง"""
+    await _delete_call_announce(scope)
+    await interaction.response.send_message(embed=embed)
+    try:
+        _call_announces[scope] = await interaction.original_response()
+    except Exception:
+        pass
+
 
 async def _auto_skip_after_timeout(guild: discord.Guild, called_user_id: int, channel_id: int, scope: Optional[int] = None):
     """รอ 1 นาที ถ้ายังไม่กด 'จบ' ให้ข้ามอัตโนมัติ"""
@@ -1131,7 +1154,8 @@ async def _auto_skip_after_timeout(guild: discord.Guild, called_user_id: int, ch
                     description=f"ข้าม {skipped_mention} (ไม่ตอบสนองภายใน 1 นาที)\nไม่มีคนในคิวต่อแล้ว",
                     color=discord.Color.orange()
                 )
-            await channel.send(embed=embed)
+            await _delete_call_announce(scope)
+            _call_announces[scope] = await channel.send(embed=embed)
 
         await refresh_all_boards(guild, scope)
     except Exception:
@@ -1281,7 +1305,7 @@ class QueueFullBoardView(discord.ui.View):
             description=f"{member.mention if member else f'<@{called_id}>'} กรุณาเข้ามาได้เลย\n⏰ มีเวลา 1 นาที",
             color=discord.Color.green()
         )
-        await interaction.response.send_message(embed=announce)
+        await _send_call_announce(interaction, qs, announce)
         await refresh_all_boards(interaction.guild, qs)
 
     @discord.ui.button(label="จบ", style=discord.ButtonStyle.red, custom_id="queue_board_end", row=1)
@@ -1321,6 +1345,7 @@ class QueueFullBoardView(discord.ui.View):
 
         member = interaction.guild.get_member(finished_id)
         name = member.display_name if member else f"<@{finished_id}>"
+        await _delete_call_announce(qs)
         await interaction.response.send_message(f"✅ จบคิวของ **{name}** แล้ว", ephemeral=True)
         await refresh_all_boards(interaction.guild, qs)
 
@@ -1399,7 +1424,7 @@ class QueueFullBoardView(discord.ui.View):
                 description=f"ข้าม {skipped_mention}\nไม่มีคนในคิวต่อแล้ว",
                 color=discord.Color.gold()
             )
-        await interaction.response.send_message(embed=announce)
+        await _send_call_announce(interaction, qs, announce)
         await refresh_all_boards(interaction.guild, qs)
 
     @discord.ui.button(label="เรียกคนถูกข้าม", style=discord.ButtonStyle.blurple, custom_id="queue_board_call_skipped", row=1)
@@ -1621,7 +1646,7 @@ async def _priority_call(interaction: discord.Interaction, target: discord.Membe
         description=f"{target.mention} กรุณาเข้ามาได้เลย",
         color=discord.Color.green()
     )
-    await interaction.response.send_message(embed=announce)
+    await _send_call_announce(interaction, qs, announce)
     await refresh_all_boards(interaction.guild, qs)
 
 
@@ -1857,7 +1882,7 @@ class QueueUrgentCallSelectView(discord.ui.View):
             description=f"{target.mention} กรุณาเข้ามาได้เลย\n⏰ มีเวลา 1 นาที",
             color=discord.Color.gold()
         )
-        await interaction.response.send_message(embed=announce)
+        await _send_call_announce(interaction, qs, announce)
         await refresh_all_boards(interaction.guild, qs)
 
 
@@ -1942,7 +1967,7 @@ async def queue_call(interaction: discord.Interaction, user: discord.Member = No
         description=f"{mention} กรุณาเข้ามาได้เลย",
         color=discord.Color.green()
     )
-    await interaction.response.send_message(embed=announce)
+    await _send_call_announce(interaction, qs, announce)
     await refresh_all_boards(interaction.guild, qs)
 
 @queue_group.command(name="skipped", description="ดูรายชื่อคนที่ถูกข้ามคิว (กระดานคิวที่ถูกข้าม)")
