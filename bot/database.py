@@ -157,6 +157,18 @@ async def init_db():
             CREATE INDEX IF NOT EXISTS idx_queue_history_guild
                 ON queue_history (guild_id, created_at DESC);
 
+            -- ตั้งเวลาโชว์กระดานคิว: weekday 0=จันทร์..6=อาทิตย์, -1=ทุกวัน (เวลาไทย)
+            CREATE TABLE IF NOT EXISTS queue_board_schedule (
+                id SERIAL PRIMARY KEY,
+                guild_id BIGINT NOT NULL,
+                channel_id BIGINT NOT NULL,
+                weekday SMALLINT NOT NULL,
+                time_hm TEXT NOT NULL,
+                created_by BIGINT,
+                last_run_date DATE,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            );
+
             CREATE TABLE IF NOT EXISTS breakout_sessions (
                 guild_id BIGINT PRIMARY KEY,
                 source_channel_id BIGINT NOT NULL,
