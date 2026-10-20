@@ -149,6 +149,8 @@ async def on_ready():
     asyncio.create_task(start_health_server())
     if not check_bookings.is_running():
         check_bookings.start()
+    if not check_board_schedules.is_running():
+        check_board_schedules.start()
     try:
         await refresh_all_dashboard_boards()
     except Exception as e:
@@ -913,6 +915,81 @@ async def refresh_all_boards(guild: discord.Guild, scope: Optional[int] = None):
             pass
 
 
+WEEKDAY_TH = ["จันทร์", "อังคาร", "พุธ", "พฤหัสบดี", "ศุกร์", "เสาร์", "อาทิตย์"]
+
+
+def _weekday_label(weekday: int) -> str:
+    return "ทุกวัน" if weekday < 0 else f"วัน{WEEKDAY_TH[weekday]}"
+
+
+async def post_queue_board(channel: discord.TextChannel) -> discord.Message:
+    """โพสต์กระดานคิวสดใหม่ในห้องนี้ (ลบข้อความกระดานเก่าของห้องนี้ทิ้ง) แล้วผูกเป็นกระดานหลักของห้อง"""
+    guild = channel.guild
+    pool = await db.get_pool()
+    old_id = await pool.fetchval(
+        "SELECT message_id FROM queue_board WHERE guild_id = $1 AND channel_id = $2",
+        guild.id, channel.id
+    )
+    embed = await build_queue_embed(guild, channel.id)
+    msg = await channel.send(embed=embed, view=QueueFullBoardView())
+    await pool.execute(
+        """
+        INSERT INTO queue_board (guild_id, channel_id, message_id)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (guild_id, channel_id) DO UPDATE SET message_id = EXCLUDED.message_id
+        """,
+        guild.id, channel.id, msg.id
+    )
+    _queue_scope_cache[channel.id] = channel.id
+    if old_id and old_id != msg.id:
+        try:
+            old = await channel.fetch_message(old_id)
+            await old.delete()
+        except Exception:
+            pass
+    return msg
+
+
+@tasks.loop(minutes=1)
+async def check_board_schedules():
+    """รันทุก 1 นาที: ถึงเวลาที่ตั้งไว้ (เวลาไทย) → โพสต์กระดานคิวในห้องที่กำหนด วันละครั้งต่อรายการ"""
+    try:
+        pool = await db.get_pool()
+        now = datetime.now(BANGKOK_TZ)
+        today = now.date()
+        rows = await pool.fetch(
+            """
+            SELECT id, guild_id, channel_id, weekday, time_hm FROM queue_board_schedule
+            WHERE (weekday = -1 OR weekday = $1)
+              AND (last_run_date IS NULL OR last_run_date < $2)
+            """,
+            now.weekday(), today
+        )
+    except Exception:
+        return
+
+    for r in rows:
+        try:
+            hh, mm = map(int, r["time_hm"].split(":"))
+        except Exception:
+            continue
+        due = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+        # ยิงเมื่อถึงเวลาแล้ว และยังไม่เลยมาเกิน 5 นาที (กันบอทรีสตาร์ทแล้วโพสต์ย้อนหลัง)
+        if not (due <= now < due + timedelta(minutes=5)):
+            continue
+        await pool.execute(
+            "UPDATE queue_board_schedule SET last_run_date = $1 WHERE id = $2", today, r["id"]
+        )
+        guild = bot.get_guild(r["guild_id"])
+        channel = guild.get_channel(r["channel_id"]) if guild else None
+        if not channel:
+            continue
+        try:
+            await post_queue_board(channel)
+        except Exception as e:
+            log.error(f"Scheduled queue board failed ({r['id']}): {e}")
+
+
 @tasks.loop(minutes=1)
 async def check_bookings():
     """
@@ -1061,6 +1138,44 @@ async def _auto_skip_after_timeout(guild: discord.Guild, called_user_id: int, ch
         pass
     finally:
         _call_timers.pop(scope, None)
+
+
+class ConfirmActionView(discord.ui.View):
+    """หน้ายืนยัน/ยกเลิก ก่อนทำคำสั่งที่ลบข้อมูล (หมดเวลา 30 วิ = ยกเลิก)"""
+    def __init__(self, owner_id: int, action):
+        super().__init__(timeout=30)
+        self.owner_id = owner_id
+        self.action = action  # async (interaction) -> str ข้อความผลลัพธ์
+        self.message: Optional[discord.Message] = None
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("❌ ปุ่มนี้สำหรับคนที่กดคำสั่งเท่านั้น", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="ยืนยัน", style=discord.ButtonStyle.danger)
+    async def confirm_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.stop()
+        await interaction.response.edit_message(content="⏳ กำลังดำเนินการ...", view=None)
+        try:
+            result = await self.action(interaction)
+        except Exception as e:
+            log.error(f"ConfirmActionView action failed: {e}")
+            result = "❌ ทำรายการไม่สำเร็จ"
+        await interaction.edit_original_response(content=result)
+
+    @discord.ui.button(label="ยกเลิก", style=discord.ButtonStyle.secondary)
+    async def cancel_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.stop()
+        await interaction.response.edit_message(content="ยกเลิกแล้ว", view=None)
+
+
+async def _clear_queue_scope(scope: int) -> int:
+    """ลบคิวหลักทั้งหมดของขอบเขตคิวนี้ คืนจำนวนคนที่ลบ"""
+    pool = await db.get_pool()
+    rows = await pool.fetch("DELETE FROM queue WHERE guild_id = $1 RETURNING user_id", scope)
+    return len(rows)
 
 
 class QueueFullBoardView(discord.ui.View):
@@ -1317,33 +1432,55 @@ class QueueFullBoardView(discord.ui.View):
 
     @discord.ui.button(label="ลบกระดานข้ามทั้งหมด", style=discord.ButtonStyle.red, custom_id="queue_board_remove_skipped", row=2)
     async def remove_skipped_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """ล้างกระดานถูกข้ามทั้งหมดในครั้งเดียว (ไม่แตะคิวหลัก)"""
+        """ล้างกระดานถูกข้ามทั้งหมด (ไม่แตะคิวหลัก) — ต้องกดยืนยันก่อน"""
         qs = await queue_scope(interaction)
         pool = await db.get_pool()
-        deleted_rows = await pool.fetch(
-            "DELETE FROM queue_skipped WHERE guild_id = $1 RETURNING user_id",
-            qs
-        )
-        if not deleted_rows:
+        count = await pool.fetchval("SELECT COUNT(*) FROM queue_skipped WHERE guild_id = $1", qs)
+        if not count:
             return await interaction.response.send_message("กระดานถูกข้ามว่างอยู่แล้ว", ephemeral=True)
-        await pool.executemany(
-            "INSERT INTO queue_history (guild_id, user_id, action, actioned_by) VALUES ($1, $2, 'removed_from_skipped', $3)",
-            [(qs, r["user_id"], interaction.user.id) for r in deleted_rows]
-        )
+
+        async def do_remove(i: discord.Interaction) -> str:
+            deleted_rows = await pool.fetch(
+                "DELETE FROM queue_skipped WHERE guild_id = $1 RETURNING user_id", qs
+            )
+            if not deleted_rows:
+                return "กระดานถูกข้ามว่างอยู่แล้ว"
+            await pool.executemany(
+                "INSERT INTO queue_history (guild_id, user_id, action, actioned_by) VALUES ($1, $2, 'removed_from_skipped', $3)",
+                [(qs, r["user_id"], i.user.id) for r in deleted_rows]
+            )
+            await refresh_all_boards(i.guild, qs)
+            return f"✅ ล้างกระดานถูกข้ามทั้งหมดแล้ว ({len(deleted_rows)} คน)"
+
         await interaction.response.send_message(
-            f"✅ ล้างกระดานถูกข้ามทั้งหมดแล้ว ({len(deleted_rows)} คน)", ephemeral=True
+            f"⚠️ ยืนยันลบกระดานถูกข้ามทั้งหมด **{count} คน** ใช่ไหม?",
+            view=ConfirmActionView(interaction.user.id, do_remove),
+            ephemeral=True
         )
-        await refresh_all_boards(interaction.guild, qs)
 
     @discord.ui.button(label="ล้างกระดาน", style=discord.ButtonStyle.danger, custom_id="queue_board_clear", row=2)
     async def clear_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """ล้างทั้ง queue และ queue_skipped"""
+        """ล้างคิวหลักทั้งหมด — ต้องกดยืนยันก่อน"""
         qs = await queue_scope(interaction)
-        # ยกเลิก timer
-        task = _call_timers.pop(qs, None)
-        if task and not task.done():
-            task.cancel()
-        await _do_clear(interaction)
+        pool = await db.get_pool()
+        count = await pool.fetchval("SELECT COUNT(*) FROM queue WHERE guild_id = $1", qs)
+        if not count:
+            return await interaction.response.send_message("ตอนนี้ไม่มีใครอยู่ในคิว", ephemeral=True)
+
+        async def do_clear(i: discord.Interaction) -> str:
+            # ยกเลิก timer
+            task = _call_timers.pop(qs, None)
+            if task and not task.done():
+                task.cancel()
+            n = await _clear_queue_scope(qs)
+            await refresh_all_boards(i.guild, qs)
+            return f"✅ ล้างคิวทั้งหมดแล้ว ({n} คน)" if n else "ตอนนี้ไม่มีใครอยู่ในคิว"
+
+        await interaction.response.send_message(
+            f"⚠️ ยืนยันล้างกระดานคิว **{count} คน** ใช่ไหม?",
+            view=ConfirmActionView(interaction.user.id, do_clear),
+            ephemeral=True
+        )
 
     @discord.ui.button(label="ดูกระดานทั้งหมด", style=discord.ButtonStyle.secondary, custom_id="queue_board_view_all", row=2)
     async def view_all_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1852,6 +1989,71 @@ async def queue_board(interaction: discord.Interaction):
         interaction.guild.id, interaction.channel.id, msg.id
     )
     _queue_scope_cache[interaction.channel.id] = scope
+
+
+_DAY_CHOICES = [app_commands.Choice(name="ทุกวัน", value=-1)] + [
+    app_commands.Choice(name=f"วัน{d}", value=i) for i, d in enumerate(WEEKDAY_TH)
+]
+
+
+@queue_group.command(name="schedule", description="ตั้งเวลาโชว์กระดานคิวอัตโนมัติ (เวลาไทย)")
+@has_mod_perms()
+@app_commands.describe(เวลา="เวลา HH:MM 24 ชม. เช่น 19:30", วัน="วันที่ให้โชว์", ห้อง="ห้องที่จะโพสต์กระดาน (ไม่ใส่ = ห้องนี้)")
+@app_commands.choices(วัน=_DAY_CHOICES)
+async def queue_schedule(
+    interaction: discord.Interaction,
+    เวลา: str,
+    วัน: app_commands.Choice[int],
+    ห้อง: Optional[discord.TextChannel] = None,
+):
+    try:
+        t = datetime.strptime(เวลา.strip(), "%H:%M")
+    except ValueError:
+        return await interaction.response.send_message("❌ รูปแบบเวลาผิด ใช้ HH:MM เช่น 19:30", ephemeral=True)
+    channel = ห้อง or interaction.channel
+    time_hm = t.strftime("%H:%M")
+    pool = await db.get_pool()
+    new_id = await pool.fetchval(
+        """
+        INSERT INTO queue_board_schedule (guild_id, channel_id, weekday, time_hm, created_by, last_run_date)
+        VALUES ($1, $2, $3, $4, $5, $6) RETURNING id
+        """,
+        interaction.guild.id, channel.id, วัน.value, time_hm, interaction.user.id,
+        # ถ้าเวลาวันนี้ผ่านไปแล้ว ไม่ต้องโพสต์ย้อนหลังวันนี้
+        datetime.now(BANGKOK_TZ).date() if datetime.now(BANGKOK_TZ).strftime("%H:%M") > time_hm else None
+    )
+    await interaction.response.send_message(
+        f"✅ ตั้งเวลาแล้ว (#{new_id}): โชว์กระดานคิว **{_weekday_label(วัน.value)} {time_hm}** ที่ {channel.mention}",
+        ephemeral=True
+    )
+
+
+@queue_group.command(name="schedulelist", description="ดูรายการตั้งเวลาโชว์กระดานคิว")
+@has_mod_perms()
+async def queue_schedule_list(interaction: discord.Interaction):
+    pool = await db.get_pool()
+    rows = await pool.fetch(
+        "SELECT id, channel_id, weekday, time_hm FROM queue_board_schedule WHERE guild_id = $1 ORDER BY weekday, time_hm",
+        interaction.guild.id
+    )
+    if not rows:
+        return await interaction.response.send_message("ยังไม่มีการตั้งเวลา", ephemeral=True)
+    lines = [f"`#{r['id']}` {_weekday_label(r['weekday'])} {r['time_hm']} → <#{r['channel_id']}>" for r in rows]
+    embed = discord.Embed(title="⏰ ตั้งเวลาโชว์กระดานคิว", description="\n".join(lines), color=0x5865F2)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+@queue_group.command(name="scheduledel", description="ลบการตั้งเวลาโชว์กระดานคิว")
+@has_mod_perms()
+@app_commands.describe(รหัส="เลข # จาก /queue schedulelist")
+async def queue_schedule_del(interaction: discord.Interaction, รหัส: int):
+    pool = await db.get_pool()
+    deleted = await pool.fetchval(
+        "DELETE FROM queue_board_schedule WHERE guild_id = $1 AND id = $2 RETURNING id",
+        interaction.guild.id, รหัส
+    )
+    msg = f"✅ ลบการตั้งเวลา #{รหัส} แล้ว" if deleted else f"❌ ไม่พบการตั้งเวลา #{รหัส}"
+    await interaction.response.send_message(msg, ephemeral=True)
 
 tree.add_command(queue_group)
 
