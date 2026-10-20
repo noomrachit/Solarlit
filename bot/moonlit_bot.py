@@ -1127,16 +1127,11 @@ async def _auto_skip_after_timeout(guild: discord.Guild, called_user_id: int, ch
         )
         await _renumber_queue(pool, scope)
 
-        # เรียกคนถัดไปอัตโนมัติ
+        # คนถัดไปขึ้นมาหัวคิว แต่ยังไม่เรียก — รอแอดมินกด "เรียก" เอง (ไม่นับเวลาต่อ)
         next_row = await pool.fetchrow(
             "SELECT user_id FROM queue WHERE guild_id = $1 ORDER BY position ASC LIMIT 1",
             scope
         )
-        if next_row:
-            await pool.execute(
-                "UPDATE queue SET called = TRUE WHERE guild_id = $1 AND user_id = $2",
-                scope, next_row["user_id"]
-            )
 
         channel = guild.get_channel(channel_id)
         if channel:
@@ -1145,7 +1140,7 @@ async def _auto_skip_after_timeout(guild: discord.Guild, called_user_id: int, ch
                 next_mention = f"<@{next_row['user_id']}>"
                 embed = discord.Embed(
                     title="⏰ หมดเวลา — ข้ามอัตโนมัติ",
-                    description=f"ข้าม {skipped_mention} (ไม่ตอบสนองภายใน 1 นาที)\n📢 ถึงคิวแล้ว: {next_mention} กรุณาเข้ามาได้เลย",
+                    description=f"ข้าม {skipped_mention} (ไม่ตอบสนองภายใน 1 นาที)\n▶️ คิวถัดไป: {next_mention} — รอเรียก",
                     color=discord.Color.orange()
                 )
             else:
