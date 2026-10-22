@@ -193,6 +193,67 @@ def _patch_voice_recv_jitter_buffer():
 
 _patch_voice_recv_jitter_buffer()
 
+
+_DAVE_STATS = {"ok": 0, "fail": 0}
+
+
+def _dave_decrypt(vc, ssrc: int, data: bytes) -> bytes:
+    """ถอดรหัสชั้น E2EE (DAVE) ของดิสคอร์ด ต่อจากการถอดรหัสขนส่งปกติ
+
+    ห้องเสียงธรรมดาตอนนี้ดิสคอร์ดเข้ารหัสเสียงแบบ E2EE (DAVE) — discord.py ส่งเสียงแบบเข้ารหัสได้แล้ว
+    แต่ voice_recv ยังไม่ถอดรหัสฝั่งรับ ผลคือหัวหน้าได้ข้อมูลเข้ารหัสไปป้อน opus → "corrupted stream"
+    (เสียงแตก/ขาดเป็นช่วงๆ ใน log 22 ต.ค.) ถ้าห้องไม่ได้เข้ารหัส (สเตจ / passthrough) จะคืนข้อมูลเดิม
+    """
+    if not data or data == b"\xf8\xff\xfe":  # เฟรมเงียบของ opus ไม่ได้เข้ารหัส
+        return data
+    conn = getattr(vc, "_connection", None)
+    sess = getattr(conn, "dave_session", None)
+    if sess is None or not getattr(conn, "dave_protocol_version", 0) or not sess.ready:
+        return data
+    uid = vc._get_id_from_ssrc(ssrc)
+    if uid is None:
+        return data
+    try:
+        out = sess.decrypt(uid, davey.MediaType.audio, data)
+        _DAVE_STATS["ok"] += 1
+        return out
+    except Exception:
+        _DAVE_STATS["fail"] += 1
+        return data  # ช่วงเปลี่ยนกุญแจ ดิสคอร์ดอาจส่งแบบไม่เข้ารหัส (passthrough) — ให้ opus ลองถอดต่อ
+
+
+def _patch_voice_recv_dave():
+    """ห่อ decrypt_rtp ของตัวรับเสียงทุกตัว ให้ถอดชั้น DAVE ต่อทันที (ก่อนเข้า jitter buffer / FEC)"""
+    global davey
+    try:
+        import davey  # type: ignore  # ติดมากับ discord.py รุ่นที่รองรับเสียง E2EE
+        from discord.ext.voice_recv import reader as vr_reader
+    except Exception as e:
+        log.warning(f"ไม่พบ davey หรือ voice_recv.reader — ข้ามการถอดรหัส E2EE ฝั่งรับ: {e}")
+        return
+    reader_cls = getattr(vr_reader, "AudioReader", None)
+    if reader_cls is None:
+        log.warning("ไม่พบ AudioReader ใน voice_recv.reader สำหรับแพตช์ DAVE")
+        return
+    orig_init = reader_cls.__init__
+
+    @functools.wraps(orig_init)
+    def patched_init(self, *args, **kwargs):
+        orig_init(self, *args, **kwargs)
+        transport_decrypt = self.decryptor.decrypt_rtp
+        vc = self.voice_client
+
+        def decrypt_rtp(packet):
+            return _dave_decrypt(vc, packet.ssrc, transport_decrypt(packet))
+
+        self.decryptor.decrypt_rtp = decrypt_rtp
+
+    reader_cls.__init__ = patched_init
+    log.info("แพตช์ถอดรหัสเสียง E2EE (DAVE) ฝั่งรับสำเร็จ")
+
+
+_patch_voice_recv_dave()
+
 FRAME_BYTES = 3840  # เฟรมเสียง 20ms ที่ 48kHz, 16-bit, stereo (มาตรฐานของ Discord voice)
 
 
@@ -1626,7 +1687,9 @@ async def watchdog_loop(units: list, pool: SpeakerPool):
                 line = " ".join(f"{k}={v}" for k, v in snap.items())
                 bad = (snap["underrun"] > 30 or snap["overflow"] > 30 or snap["decode_err"] > 20
                        or snap["pump_late"] > 10 or max_ping > 250)
-                (log.warning if bad else log.info)(f"HEALTH {line} max_ping_ms={max_ping}"
+                dave = f" dave_ok={_DAVE_STATS['ok']} dave_fail={_DAVE_STATS['fail']}"
+                _DAVE_STATS["ok"] = _DAVE_STATS["fail"] = 0
+                (log.warning if bad else log.info)(f"HEALTH {line} max_ping_ms={max_ping}{dave}"
                                                    + (" ⚠️ เสียงมีปัญหา" if bad else ""))
                 events = list(RECONNECT_EVENTS)
                 RECONNECT_EVENTS.clear()

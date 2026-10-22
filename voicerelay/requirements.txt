@@ -6,3 +6,4 @@ aiohttp>=3.9.0
 numpy>=1.26.0
 asyncpg>=0.29.0
 
+davey>=0.1.7
