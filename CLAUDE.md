@@ -38,8 +38,7 @@ No test runner (Jest/Vitest/pytest) is configured anywhere in the repo. CI (`.gi
 only runs `pnpm run typecheck`, `pnpm run build`, and, for the Python bot, `python -m py_compile
 moonlit_bot.py database.py` (a syntax check, not real tests). There is no lint step in CI.
 
-Python services each have their own venv and `requirements.txt` (`bot/`, `voicebot/`, `voicerelay/`,
-`website/`). The Nix/Replit environment blocks system-wide `pip install`; always create a venv and pass
+Python services each have their own venv and `requirements.txt` (`bot/`, `voicebot/`, `website/`). The Nix/Replit environment blocks system-wide `pip install`; always create a venv and pass
 `--no-user`, per `.agents/memory/python-venv-nix.md`:
 
 ```bash
@@ -47,7 +46,8 @@ cd bot && python3 -m venv .venv && .venv/bin/pip install -q --no-user -r require
 .venv/bin/python moonlit_bot.py
 ```
 
-Same pattern for `voicebot/voice_bot.py`, `voicerelay/relay_bot.py`, `website/server.py`.
+Same pattern for `voicebot/voice_bot.py`, `website/server.py`. (Voice Relay lives in its own repo,
+`noomrachit/voice-relay`, with its own README/CI.)
 
 ## Architecture
 
@@ -66,7 +66,7 @@ Same pattern for `voicebot/voice_bot.py`, `voicerelay/relay_bot.py`, `website/se
 - `lib/api-zod` — generated (`src/generated/`) Zod schemas/types for the same API surface, consumed by
   `api-server` route handlers for request/response types.
 - `scripts` — misc `tsx` one-off scripts.
-- `bot/`, `voicebot/`, `voicerelay/`, `website/` — independent Python processes (see below); **not** part
+- `bot/`, `voicebot/`, `website/` — independent Python processes (see below); **not** part
   of the pnpm workspace, no shared code with the TS side.
 - `attached_assets/` — leftover uploads/snapshots from Replit (old zips, pasted snippets, a stale copy
   of the bot under `attached_assets/moonlit-bot/`); not live code, don't treat it as source of truth.
@@ -125,11 +125,8 @@ The registered Discord OAuth redirect URI must exactly match what the server com
   Node `pg` pool). Runs a tiny `aiohttp` health-check server on `$BOT_HEALTH_PORT`.
 - `voicebot/voice_bot.py` — separate Discord bot for voice-activity tracking/analytics (matplotlib
   charts). Has its own `database.py` and Discord bot token; unrelated to `bot/`.
-- `voicerelay/relay_bot.py` (note: `voicerelay/relay bot.py`, with a space, also exists in the tree and
-  is stale/duplicate — the underscore file is the one referenced by tooling) — a listener bot +
-  N speaker bots relaying one voice channel's audio into several others in real time. Needs
-  `LISTENER_BOT_TOKEN` and `SPEAKER_BOT_TOKEN_<n>` per concurrent target room; one-way audio only,
-  ~0.3–0.8s latency by design (see the module docstring for the full constraint list).
+- **Voice Relay has moved** to its own repository, `noomrachit/voice-relay` (deployed on Railway from
+  that repo, root `/`). It is no longer part of this repo — do not recreate `voicerelay/` here.
 - `website/` — a minimal `aiohttp` static server serving `index.html`/`docs.html`.
 
 Each Python service reads its own `.env` (see root `.env.example` for the bot's variables:
@@ -148,7 +145,7 @@ Each Python service reads its own `.env` (see root `.env.example` for the bot's 
   set) serving different audiences (admin UI vs. public command docs) — changes to shared UI patterns
   often need to land in both.
 - Bot-facing code, comments, and command descriptions are predominantly in Thai; match that convention
-  when touching `bot/`, `voicebot/`, `voicerelay/`, `website/`, and `SETUP.md`.
+  when touching `bot/`, `voicebot/`, `website/`, and `SETUP.md`.
 
 ## Confirm before editing or saving files
 

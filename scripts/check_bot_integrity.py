@@ -23,15 +23,6 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # ไฟล์ -> (จำนวนบรรทัดขั้นต่ำ, ข้อความที่ต้องมี)
 FILES = {
-    "voicerelay/relay_bot.py": (700, [
-        "class SpeakerPool",
-        "class RelayUnit",
-        "async def mixer_pump",
-        "async def main",
-        'if __name__ == "__main__"',
-    ]),
-    "voicerelay/access.py": (5, []),
-    "voicerelay/preflight.py": (30, ["def main"]),
     "voicebot/voice_bot.py": (1500, ["async def main", 'if __name__ == "__main__"']),
     "voicebot/database.py": (20, []),
     "bot/moonlit_bot.py": (2000, ["async def main", 'if __name__ == "__main__"']),
