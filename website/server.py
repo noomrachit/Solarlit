@@ -68,6 +68,11 @@ async def favicon(request):
                             headers={"Content-Type": "image/svg+xml", "Cache-Control": "public, max-age=604800"})
 
 
+async def touch_icon(request):
+    return web.FileResponse(os.path.join(BASE_DIR, "apple-touch-icon.png"),
+                            headers={"Content-Type": "image/png", "Cache-Control": "public, max-age=604800"})
+
+
 async def robots(request):
     return web.Response(text="User-agent: *\nAllow: /\n", content_type="text/plain")
 
@@ -159,6 +164,8 @@ def main():
     app.router.add_get("/privacy.html", privacy)
     app.router.add_get("/favicon.svg", favicon)
     app.router.add_get("/favicon.ico", favicon)
+    app.router.add_get("/apple-touch-icon.png", touch_icon)  # ไอคอนตอนเพิ่มเว็บไว้หน้าจอโฮมไอโฟน
+    app.router.add_get("/apple-touch-icon-precomposed.png", touch_icon)
     app.router.add_get("/robots.txt", robots)
     app.router.add_get("/health", health)
     port = int(os.getenv("PORT", 8080))

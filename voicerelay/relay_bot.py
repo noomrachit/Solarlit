@@ -1105,7 +1105,13 @@ class RelayUnit:
                     f"❌ {unit.name} ไม่มีสิทธิ์ ดูห้อง / ส่งข้อความ / แนบลิงก์ ใน {channel.mention}", ephemeral=True)
             await interaction.response.defer(ephemeral=True)
             await access.set_health_channel(interaction.guild.id, channel.id)
-            sent = await channel.send(embed=build_health_embed(units_ref(), pool, interaction.guild, False))
+            poster = channel
+            for u in units_ref():  # ให้บอทตัวเดียวกับที่อัปเดตทุกนาที (หัวหน้าตัวแรกที่เห็นห้อง) เป็นคนโพสต์
+                c = u.bot.get_channel(channel.id)
+                if c is not None:
+                    poster = c
+                    break
+            sent = await poster.send(embed=build_health_embed(units_ref(), pool, interaction.guild, False))
             await access.set_health_message(interaction.guild.id, sent.id)
             await interaction.followup.send(
                 f"✅ ตั้ง {channel.mention} เป็นห้องสถานะแล้ว — อัปเดตทุก 1 นาที และประกาศเตือนเมื่อเสียงมีปัญหา/บอทหลุด",
@@ -1710,8 +1716,10 @@ async def update_health_channels(units: list, pool: SpeakerPool, bad: bool, even
             except discord.NotFound:
                 msg = None
             except discord.Forbidden:
-                log.warning(f"ห้องสถานะ {channel_id}: ไม่มีสิทธิ์แก้ข้อความ")
-                continue
+                # ข้อความเดิมโพสต์โดยบอทอีกตัว (เช่นตั้งห้องผ่านหัวหน้า 2) — ดิสคอร์ดไม่ให้แก้ข้อความของบอทอื่น
+                # โพสต์ข้อความสถานะใหม่ด้วยบอทตัวนี้แทน แล้วรอบถัดไปจะแก้ข้อความใหม่นี้ได้ปกติ
+                log.warning(f"ห้องสถานะ {channel_id}: แก้ข้อความเดิมไม่ได้ — โพสต์ข้อความสถานะใหม่แทน")
+                msg = None
         if msg is None:
             try:
                 sent = await ch.send(embed=embed)
