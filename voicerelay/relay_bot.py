@@ -499,6 +499,7 @@ class RelayUnit:
         self.speaker_bindings: dict = {}  # index -> {"channel_id": ...}
         self.guild_id: Optional[int] = None  # guild ที่กำลังฟังอยู่ตอนนี้ (ไว้คิดโควต้า)
         self.last_speaking_error: Optional[str] = None  # "quota" | "not_invited" | None — อ่านหลังเรียก start_speaking*
+        self._bindings_restored = False  # โหลดการผูกจาก DB กลับมาแล้วหรือยัง (ทำครั้งเดียวตอน on_ready ครั้งแรก)
 
         intents = discord.Intents.default()
         intents.voice_states = True
@@ -542,6 +543,38 @@ class RelayUnit:
             log.warning(f"[{self.name}] ไม่เปิดลูกน้องเพิ่มในเซิร์ฟ {guild_id}: ครบโควต้า {limit} ตัวแล้ว")
             return False
         return True
+
+    # ── เก็บ/โหลดการผูกห้อง-ล็อกคนลง DB (deploy ใหม่แล้วไม่หาย) ──
+
+    async def persist_bindings(self):
+        """บันทึกการผูกปัจจุบันของหัวหน้าตัวนี้ลง DB — พังก็แค่เตือน ไม่ให้คำสั่งล้ม"""
+        try:
+            await access.save_unit_bindings(self.unit_no, self.listener_binding, self.speaker_bindings)
+        except Exception as e:
+            log.warning(f"[{self.name}] บันทึกการผูกลง DB ไม่ได้: {e}")
+
+    async def restore_bindings(self):
+        """โหลดการผูกจาก DB กลับเข้าหน่วยความจำ (ครั้งเดียว) — ส่วนเข้าห้องจริงให้ watchdog/voice event ทำต่อเอง"""
+        if self._bindings_restored:
+            return
+        self._bindings_restored = True
+        try:
+            listener, speakers = await access.load_unit_bindings(self.unit_no)
+        except Exception as e:
+            log.warning(f"[{self.name}] โหลดการผูกจาก DB ไม่ได้: {e}")
+            return
+        if listener and not self.listener_binding.get("channel_id") and not self.listener_binding.get("user_id"):
+            self.listener_binding.clear()
+            self.listener_binding.update(listener)
+        restored = 0
+        for idx0, b in speakers.items():
+            if idx0 >= len(self.pool.speaker_bots) or idx0 in self.speaker_bindings:
+                continue
+            if self.pool.try_bind(idx0, self) is None:
+                self.speaker_bindings[idx0] = b
+                restored += 1
+        if listener or restored:
+            log.info(f"[{self.name}] โหลดการผูกจาก DB: หัวหน้า {'มี' if listener else 'ไม่มี'} · ลูกน้อง {restored} ตัว")
 
     # ── connect/disconnect ──
 
@@ -746,6 +779,7 @@ class RelayUnit:
         async def relay_bindlistener(interaction: discord.Interaction, channel: Union[discord.VoiceChannel, discord.StageChannel]):
             unit.listener_binding.clear()
             unit.listener_binding["channel_id"] = channel.id
+            await unit.persist_bindings()
             await interaction.response.send_message(
                 f"🔗 ผูก {unit.name} กับห้อง {channel.mention} แล้ว\n"
                 f"ต่อไปนี้: มีคนเข้าห้องนี้ (คนแรก) → {unit.name} ตามเข้าอัตโนมัติ / ห้องว่าง (คนสุดท้ายออก) → ตามออกอัตโนมัติ",
@@ -778,6 +812,7 @@ class RelayUnit:
                 )
 
             unit.speaker_bindings[idx0] = {"channel_id": channel.id}
+            await unit.persist_bindings()
             await interaction.response.send_message(
                 f"🔗 ผูกบอทพูดตัวที่ {index} กับห้อง {channel.mention} แล้ว ({unit.name})\n"
                 f"ต่อไปนี้: มีคนเข้าห้องนี้ (คนแรก) → บอทพูดตัวที่ {index} ตามเข้าอัตโนมัติ / ห้องว่าง → บอทตามออกอัตโนมัติ",
@@ -834,6 +869,7 @@ class RelayUnit:
                 unit.speaker_bindings[idx0] = {"channel_id": channel.id}
                 success_lines.append(f"🔗 บอทพูดตัวที่ {idx0 + 1} → {channel.mention}")
 
+            await unit.persist_bindings()
             header = f"ผูกสำเร็จ {len(success_lines)}/{len(channels)} ห้อง ({unit.name})"
             lines = [header] + success_lines + fail_lines
             lines.append("")
@@ -938,6 +974,7 @@ class RelayUnit:
                         note = f" (เข้าไม่ได้: {e})"
                 lines.append(f"🔗 ลูกน้อง {idx0 + 1} → {r.mention}{note}")
 
+            await unit.persist_bindings()
             lines.insert(0, f"ผูกอัตโนมัติสำเร็จ {ok}/{len(rooms)} ห้อง")
             lines.append("")
             lines.append("ต่อไปนี้: ห้องไหนมีคนเข้า → บอทเข้าเอง / ห้องว่าง → บอทออกเอง · ยกเลิกด้วย `/relay unbind`")
@@ -1006,6 +1043,7 @@ class RelayUnit:
             unit.listener_binding.clear()
             unit.listener_binding.update(user_id=user.id, guild_id=interaction.guild.id,
                                          channel_id=channel.id if channel else None)
+            await unit.persist_bindings()
             target = follow_target(unit.bot, unit.listener_binding)
             note = ""
             if target is not None:
@@ -1044,6 +1082,7 @@ class RelayUnit:
             binding = {"user_id": user.id, "guild_id": interaction.guild.id,
                        "channel_id": channel.id if channel else None}
             unit.speaker_bindings[idx0] = binding
+            await unit.persist_bindings()
             note = ""
             target = follow_target(unit.bot, binding)
             if target is not None and unit.relay_active:
@@ -1071,6 +1110,7 @@ class RelayUnit:
             for idx0 in list(unit.speaker_bindings.keys()):
                 pool.release_bind(idx0, unit)
             unit.speaker_bindings.clear()
+            await unit.persist_bindings()
             await interaction.response.send_message("🔓 ยกเลิกการผูกอัตโนมัติทั้งหมดแล้ว (ยังใช้คำสั่งแบบ manual ได้ปกติ)", ephemeral=True)
 
         @relay_group.command(name="health", description="ตัวเฝ้าเสียง: เช็คเสียงขาด/ดีเลย์/ปิง/บอทหลุด ในนาทีล่าสุด")
@@ -1400,6 +1440,7 @@ class RelayUnit:
                 log.info(f"[{unit.name}] Synced {len(synced)} commands")
             except Exception as e:
                 log.error(f"[{unit.name}] Sync failed: {e}")
+            await unit.restore_bindings()
 
         @self.bot.event
         async def on_voice_state_update(member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
