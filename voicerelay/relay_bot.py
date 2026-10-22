@@ -216,6 +216,11 @@ class Mixer:
         if len(buf) > limit:
             del buf[:len(buf) - limit]
 
+    def drop_all(self):
+        """ล้างเสียงที่สะสมไว้ทั้งหมด (ใช้ตอนไม่มีใครฟัง จะได้ไม่ต้องผสมเสียงทิ้งเปล่าๆ)"""
+        self.buffers.clear()
+        self.primed.clear()
+
     def pop_frame(self) -> bytes:
         mixed = None
         for uid, buf in list(self.buffers.items()):
@@ -238,6 +243,21 @@ class Mixer:
         # clip กันเสียงล้น (hard clipping) ตอนมีคนพูดพร้อมกันหลายคนเสียงดังรวมกัน
         mixed = np.clip(mixed, -32768, 32767).astype(np.int16)
         return mixed.tobytes()
+
+
+def mix_minus(main: bytes, rooms: dict) -> tuple:
+    """
+    โหมด conference: รับเฟรมห้องหลัก + {index ลูกน้อง: เฟรมของห้องย่อยนั้น}
+    คืน (เฟรมส่งเข้าห้องหลัก = ผลรวมทุกห้องย่อย, {index: เฟรมส่งเข้าห้องย่อยนั้น = ห้องหลัก + ห้องย่อยอื่น ไม่รวมของตัวเอง})
+    """
+    main_a = np.frombuffer(main, dtype=np.int16).astype(np.int32)
+    room_a = {i: np.frombuffer(f, dtype=np.int16).astype(np.int32) for i, f in rooms.items()}
+    rooms_sum = np.zeros_like(main_a)
+    for a in room_a.values():
+        rooms_sum += a
+    to_main = np.clip(rooms_sum, -32768, 32767).astype(np.int16).tobytes()
+    outs = {i: np.clip(main_a + rooms_sum - a, -32768, 32767).astype(np.int16).tobytes() for i, a in room_a.items()}
+    return to_main, outs
 
 
 class RelaySink(voice_recv.AudioSink):
@@ -432,6 +452,8 @@ class SpeakerPool:
     def __init__(self, speaker_bots: list):
         self.speaker_bots = speaker_bots
         self.queues: list = [FrameBuffer(i + 1) for i in range(len(speaker_bots))]
+        self.room_mixers: list = [Mixer() for _ in speaker_bots]  # เสียงที่ลูกน้องฟังได้จากห้องย่อยตัวเอง (โหมด conference)
+        self._listen_cache: dict = {}  # index -> (เวลา, มีคนฟังไหม) จำผล 1 วินาที
         self.owner: dict = {}              # index -> RelayUnit ที่กำลังใช้ index นี้ "สด" อยู่ตอนนี้ (connect อยู่จริง)
         self.channel_map: dict = {}        # index -> channel_id (ไว้โชว์ /relay status)
         self.guild_map: dict = {}          # index -> guild_id (ไว้นับโควต้าลูกน้องต่อเซิร์ฟเวอร์)
@@ -457,12 +479,29 @@ class SpeakerPool:
         self.channel_map.pop(index, None)
         self.guild_map.pop(index, None)
         self.queues[index].clear()
+        self.room_mixers[index].drop_all()
+        self._listen_cache.pop(index, None)
 
     def indices_for(self, unit) -> list:
         return [i for i, owner in self.owner.items() if owner is unit]
 
     def total_in_use(self) -> int:
         return len(self.owner)
+
+    def has_listeners(self, index: int) -> bool:
+        """ห้องของลูกน้องตัวนี้มีคน (ไม่ใช่บอท) ฟังอยู่ไหม — จำผล 1 วินาที / มองไม่เห็นห้อง = ถือว่ามี (ปลอดภัยไว้ก่อน)"""
+        now = time.monotonic()
+        cached = self._listen_cache.get(index)
+        if cached is not None and now - cached[0] < 1.0:
+            return cached[1]
+        ok = True
+        cid = self.channel_map.get(index)
+        if cid:
+            ch = self.speaker_bots[index].get_channel(cid)
+            if ch is not None:
+                ok = _count_humans(ch) > 0
+        self._listen_cache[index] = (now, ok)
+        return ok
 
     def in_use_for_guild(self, guild_id: int) -> int:
         return sum(1 for g in self.guild_map.values() if g == guild_id)
@@ -529,6 +568,9 @@ class RelayUnit:
         self.guild_id: Optional[int] = None  # guild ที่กำลังฟังอยู่ตอนนี้ (ไว้คิดโควต้า)
         self.last_speaking_error: Optional[str] = None  # "quota" | "not_invited" | None — อ่านหลังเรียก start_speaking*
         self._bindings_restored = False  # โหลดการผูกจาก DB กลับมาแล้วหรือยัง (ทำครั้งเดียวตอน on_ready ครั้งแรก)
+        # โหมด conference (/relay conference): สองทางแบบ mix-minus — เก็บในหน่วยความจำ deploy ใหม่กลับเป็นปิด
+        self.conference = False
+        self.listener_out = FrameBuffer("หัวหน้า")  # เสียงที่หัวหน้าเล่นกลับเข้าห้องหลัก (เฉพาะโหมด conference)
 
         intents = discord.Intents.default()
         intents.voice_states = True
@@ -618,6 +660,9 @@ class RelayUnit:
         await ensure_voice_region(channel)
         listener_vc = await channel.connect(cls=voice_recv.VoiceRecvClient)
         listener_vc.listen(RelaySink(self.mixer, self.role_filter))
+        if self.conference:
+            self.listener_out.clear()
+            listener_vc.play(QueueAudioSource(self.listener_out))
         self.relay_active = True
         self.guild_id = channel.guild.id
         log.info(f"[{self.name}] เข้าห้อง {channel.name} แล้ว")
@@ -627,6 +672,7 @@ class RelayUnit:
         if not self.relay_active:
             return
         self.relay_active = False
+        self.listener_out.clear()
         for guild in self.bot.guilds:
             if guild.voice_client:
                 await guild.voice_client.disconnect(force=True)
@@ -671,7 +717,12 @@ class RelayUnit:
             return False
 
         await ensure_voice_region(channel)  # แก้ผ่านหัวหน้า (มักมีสิทธิ์มากกว่าลูกน้อง)
-        vc = await target_channel.connect()
+        if self.conference:
+            # สองทาง: ลูกน้องฟังเสียงห้องย่อยของตัวเองด้วย (บอทถูกกรองใน RelaySink จึงไม่ได้ยินเสียงที่ตัวเองเล่น)
+            vc = await target_channel.connect(cls=voice_recv.VoiceRecvClient)
+            vc.listen(RelaySink(self.pool.room_mixers[index], {"role_id": None}))
+        else:
+            vc = await target_channel.connect()
         vc.play(QueueAudioSource(self.pool.queues[index]))
         self.pool.channel_map[index] = channel.id
         self.pool.guild_map[index] = channel.guild.id
@@ -1142,7 +1193,31 @@ class RelayUnit:
             await unit.persist_bindings()
             await interaction.response.send_message("🔓 ยกเลิกการผูกอัตโนมัติทั้งหมดแล้ว (ยังใช้คำสั่งแบบ manual ได้ปกติ)", ephemeral=True)
 
-        @relay_group.command(name="health", description="ตัวเฝ้าเสียง: เช็คเสียงขาด/ดีเลย์/ปิง/บอทหลุด ในนาทีล่าสุด")
+        @relay_group.command(name="conference", description="โหมดสองทาง: ห้องหลักและห้องย่อยได้ยินกันและกัน (ไม่ได้ยินเสียงตัวเองกลับ)")
+        @has_relay_perms()
+        @app_commands.describe(mode="เปิด = สองทาง (mix-minus) · ปิด = ทางเดียวเหมือนเดิม")
+        @app_commands.choices(mode=[
+            app_commands.Choice(name="เปิด", value="on"),
+            app_commands.Choice(name="ปิด", value="off"),
+        ])
+        async def relay_conference(interaction: discord.Interaction, mode: app_commands.Choice[str]):
+            on = mode.value == "on"
+            if on == unit.conference:
+                return await interaction.response.send_message(
+                    f"โหมด conference {'เปิด' if on else 'ปิด'}อยู่แล้ว", ephemeral=True)
+            unit.conference = on
+            if not on:
+                unit.listener_out.clear()
+                for idx0 in pool.indices_for(unit):
+                    pool.room_mixers[idx0].drop_all()
+            await interaction.response.send_message(
+                f"{'🔁 เปิด' if on else '➡️ ปิด'}โหมด conference ของ {unit.name} แล้ว\n"
+                + ("มีผลตอนบอทเข้าห้องครั้งถัดไป — ถ้าบอทอยู่ในห้องแล้ว ให้ `/relay stop` แล้วเริ่มใหม่ (หรือรอให้ห้องว่างแล้วมีคนเข้า)\n"
+                   "ห้องหลักได้ยินทุกห้องย่อย · แต่ละห้องย่อยได้ยินห้องหลักและห้องย่อยอื่น ไม่ได้ยินเสียงตัวเอง"
+                   if on else "กลับไปทางเดียวแล้ว"),
+                ephemeral=True)
+
+        @relay_group.command(name="health",description="ตัวเฝ้าเสียง: เช็คเสียงขาด/ดีเลย์/ปิง/บอทหลุด ในนาทีล่าสุด")
         async def relay_health(interaction: discord.Interaction):
             h = LAST_HEALTH
             if not h:
@@ -1872,13 +1947,33 @@ async def mixer_pump(units: list, pool: SpeakerPool):
             # (ไม่มีใครมาดึงออกไปใช้) พอมีบอทพูดต่อเข้ามาทีหลัง เสียงค้างทั้งหมดจะไหลออกมาทีเดียว
             # ฟังดูเหมือน "เสียงอัดเทป" เพราะเป็นเสียงที่พูดไปนานแล้วเพิ่งมาเล่นทีหลัง ไม่ realtime
             # — pop ทิ้งทุก tick เพื่อให้ buffer โตเท่าที่ไม่มีคนฟังเท่านั้น ไม่สะสมข้ามช่วงเวลา
-            frame = unit.mixer.pop_frame()
             my_indices = pool.indices_for(unit)
-            if not my_indices:
+            # ห้องย่อยที่ไม่มีคนฟังเลย ไม่ป้อนเฟรมให้ (ล้างคิวทิ้ง) — ถ้าไม่มีห้องไหนมีคนฟังเลย ข้ามการผสมเสียงทั้งหมด
+            active = {i for i in my_indices if pool.has_listeners(i)}
+            if unit.conference:
+                # สองทาง (mix-minus): ห้องหลักได้ผลรวมทุกห้องย่อย / แต่ละห้องย่อยได้ห้องหลัก+ห้องย่อยอื่น (ไม่รวมตัวเอง)
+                main = unit.mixer.pop_frame()
+                rooms = {i: pool.room_mixers[i].pop_frame() for i in my_indices}  # ดึงทุกตัวเพื่อไม่ให้ค้างสะสม
+                to_main, outs = mix_minus(main, rooms)
+                unit.listener_out.put(to_main)
+                for idx in my_indices:
+                    if idx in active:
+                        pool.queues[idx].put(outs[idx])
+                    else:
+                        pool.queues[idx].clear()
                 continue
+            if not active:
+                unit.mixer.drop_all()
+                for idx in my_indices:
+                    pool.queues[idx].clear()
+                continue
+            frame = unit.mixer.pop_frame()
             for idx in my_indices:
-                # FrameBuffer ทิ้งเฟรมเก่าสุดเองเมื่อเต็ม กันดีเลย์สะสม
-                pool.queues[idx].put(frame)
+                if idx in active:
+                    # FrameBuffer ทิ้งเฟรมเก่าสุดเองเมื่อเต็ม กันดีเลย์สะสม
+                    pool.queues[idx].put(frame)
+                else:
+                    pool.queues[idx].clear()
 
 
 # Health check
