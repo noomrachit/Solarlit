@@ -290,32 +290,61 @@ class FrameBuffer:
     คิวเฟรมเสียงของบอทพูดแต่ละตัว — ปลอดภัยข้ามเธรด (ตัวเล่นเสียงของ discord.py อ่านจากเธรดของมันเอง
     ส่วน mixer_pump เขียนจาก event loop เดิมใช้ asyncio.Queue ซึ่งไม่ปลอดภัยข้ามเธรด)
     มีสำรองก่อนเล่น (prefill) กันนาฬิกา 2 ฝั่งเหลื่อมกันจนเกิดช่องเงียบสลับเสียง = เสียงแตก
+    สำรองปรับเองต่อบอทพูดแต่ละตัว: เสียงขาด (underrun) → เพิ่มทีละ 1 เฟรม · เงียบสนิท CALM_SECONDS → ลดทีละ 1 เฟรม
+    (pump ป้อนเฟรมเงียบเข้ามาตลอด ดังนั้น underrun ที่นับได้คือเน็ตสะดุดจริง ไม่ใช่แค่คนหยุดพูด)
     """
-    PREFILL = 3   # 60ms
-    MAXLEN = 15   # 300ms เกินนี้ทิ้งเฟรมเก่าสุด กันดีเลย์สะสม
+    PREFILL_MIN = 2       # 40ms
+    PREFILL_DEFAULT = 3   # 60ms (ค่าเริ่มต้นเท่าเดิม)
+    PREFILL_MAX = 6       # 120ms
+    CALM_SECONDS = 60
+    BASE_MAXLEN = 15      # 300ms
+    EXTRA_FRAMES = 12     # คิวเต็มที่ = สำรอง + 12 เฟรม (ไม่ต่ำกว่า BASE_MAXLEN) เกินนี้ทิ้งเฟรมเก่าสุด กันดีเลย์สะสม
 
-    def __init__(self):
-        self._q = deque(maxlen=self.MAXLEN)
+    def __init__(self, label: str = ""):
+        self.label = label
+        self.prefill = self.PREFILL_DEFAULT
+        self._q = deque()
         self._lock = threading.Lock()
         self._playing = False
+        self._last_change = time.monotonic()  # เวลาที่ underrun ล่าสุด/ปรับค่าล่าสุด (ไว้ตัดสินว่า "นิ่ง" พอจะลดสำรอง)
+
+    @property
+    def maxlen(self) -> int:
+        return max(self.BASE_MAXLEN, self.prefill + self.EXTRA_FRAMES)
 
     def put(self, frame: bytes):
         with self._lock:
-            if len(self._q) == self.MAXLEN:
-                health_inc("overflow")  # ค้างเกิน 300ms ต้องทิ้งเฟรมเก่า = ดีเลย์/หน่วง
+            if len(self._q) >= self.maxlen:
+                self._q.popleft()
+                health_inc("overflow")  # ค้างเกินคิวสูงสุด ต้องทิ้งเฟรมเก่า = ดีเลย์/หน่วง
             self._q.append(frame)
 
     def get(self) -> Optional[bytes]:
+        change = None  # (เก่า, ใหม่, เหตุผล) — เขียน log นอก lock
+        frame = None
         with self._lock:
             if not self._playing:
-                if len(self._q) < self.PREFILL:
-                    return None
-                self._playing = True
-            if not self._q:
-                self._playing = False
-                health_inc("underrun")  # กำลังเล่นแล้วเฟรมไม่มา = เสียงขาด/แตก
-                return None
-            return self._q.popleft()
+                if len(self._q) >= self.prefill:
+                    self._playing = True
+            if self._playing:
+                if not self._q:
+                    self._playing = False
+                    health_inc("underrun")  # กำลังเล่นแล้วเฟรมไม่มา = เสียงขาด/แตก
+                    now = time.monotonic()
+                    self._last_change = now
+                    if self.prefill < self.PREFILL_MAX:
+                        change = (self.prefill, self.prefill + 1, "เสียงขาด")
+                        self.prefill += 1
+                else:
+                    frame = self._q.popleft()
+                    now = time.monotonic()
+                    if self.prefill > self.PREFILL_MIN and now - self._last_change >= self.CALM_SECONDS:
+                        self._last_change = now
+                        change = (self.prefill, self.prefill - 1, "นิ่งแล้ว")
+                        self.prefill -= 1
+        if change:
+            log.info(f"[Speaker {self.label}] ปรับสำรองเสียง {change[0] * 20}ms → {change[1] * 20}ms ({change[2]})")
+        return frame
 
     def clear(self):
         with self._lock:
@@ -402,7 +431,7 @@ class SpeakerPool:
 
     def __init__(self, speaker_bots: list):
         self.speaker_bots = speaker_bots
-        self.queues: list = [FrameBuffer() for _ in speaker_bots]
+        self.queues: list = [FrameBuffer(i + 1) for i in range(len(speaker_bots))]
         self.owner: dict = {}              # index -> RelayUnit ที่กำลังใช้ index นี้ "สด" อยู่ตอนนี้ (connect อยู่จริง)
         self.channel_map: dict = {}        # index -> channel_id (ไว้โชว์ /relay status)
         self.guild_map: dict = {}          # index -> guild_id (ไว้นับโควต้าลูกน้องต่อเซิร์ฟเวอร์)
