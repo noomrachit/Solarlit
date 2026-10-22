@@ -474,3 +474,76 @@ async def list_health_channels() -> list:
         return []
     rows = await pool.fetch("SELECT guild_id, channel_id, message_id FROM relay_health_channel")
     return [(r["guild_id"], r["channel_id"], r["message_id"]) for r in rows]
+
+
+# ── การผูกห้อง/ล็อกคน (bindlistener, bindspeaker(s), go, followleader, followspeaker) — เก็บถาวร ──
+# เก็บตามเลขหัวหน้า (unit_no) — เขียนทับทั้งชุดของหัวหน้าตัวนั้นทุกครั้งที่ผูก/เลิกผูก
+# ไม่มีฐานข้อมูล (BILLING_DATABASE_URL ว่าง) = ทำงานแบบหน่วยความจำเหมือนเดิม ไม่ล่ม
+_bind_table_ready = False
+
+
+async def _bind_pool():
+    global _bind_table_ready
+    pool = await _get_pool()
+    if pool is None:
+        return None
+    if not _bind_table_ready:
+        await pool.execute(
+            """
+            CREATE TABLE IF NOT EXISTS relay_bindings (
+                unit_no    INT NOT NULL,
+                kind       TEXT NOT NULL,      -- 'listener' | 'speaker'
+                slot       INT NOT NULL,       -- listener = 0, speaker = index ลูกน้อง (เริ่ม 0)
+                channel_id BIGINT,
+                user_id    BIGINT,
+                guild_id   BIGINT,
+                PRIMARY KEY (unit_no, kind, slot)
+            )
+            """
+        )
+        _bind_table_ready = True
+    return pool
+
+
+async def save_unit_bindings(unit_no: int, listener: dict, speakers: dict) -> bool:
+    """เขียนทับการผูกทั้งหมดของหัวหน้าตัวนี้ (listener = dict การผูกบอทฟัง, speakers = {index: dict})"""
+    pool = await _bind_pool()
+    if pool is None:
+        return False
+    rows = []
+    if listener and (listener.get("channel_id") or listener.get("user_id")):
+        rows.append(("listener", 0, listener))
+    for idx0, b in speakers.items():
+        if b and (b.get("channel_id") or b.get("user_id")):
+            rows.append(("speaker", int(idx0), b))
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("DELETE FROM relay_bindings WHERE unit_no = $1", unit_no)
+            for kind, slot, b in rows:
+                await conn.execute(
+                    "INSERT INTO relay_bindings (unit_no, kind, slot, channel_id, user_id, guild_id) "
+                    "VALUES ($1, $2, $3, $4, $5, $6)",
+                    unit_no, kind, slot, b.get("channel_id"), b.get("user_id"), b.get("guild_id"),
+                )
+    return True
+
+
+async def load_unit_bindings(unit_no: int) -> tuple:
+    """คืน (listener_dict, {index: dict}) — ว่างทั้งคู่ถ้าไม่มีฐานข้อมูล/ไม่เคยผูก"""
+    pool = await _bind_pool()
+    if pool is None:
+        return {}, {}
+    rows = await pool.fetch(
+        "SELECT kind, slot, channel_id, user_id, guild_id FROM relay_bindings WHERE unit_no = $1", unit_no
+    )
+    listener: dict = {}
+    speakers: dict = {}
+    for r in rows:
+        b = {"channel_id": r["channel_id"]}
+        if r["user_id"]:
+            b.update(user_id=r["user_id"], guild_id=r["guild_id"])
+        if r["kind"] == "listener":
+            listener = b
+        else:
+            speakers[r["slot"]] = b
+    return listener, speakers

@@ -277,6 +277,11 @@ class Mixer:
         if len(buf) > limit:
             del buf[:len(buf) - limit]
 
+    def drop_all(self):
+        """ล้างเสียงที่สะสมไว้ทั้งหมด (ใช้ตอนไม่มีใครฟัง จะได้ไม่ต้องผสมเสียงทิ้งเปล่าๆ)"""
+        self.buffers.clear()
+        self.primed.clear()
+
     def pop_frame(self) -> bytes:
         mixed = None
         for uid, buf in list(self.buffers.items()):
@@ -299,6 +304,21 @@ class Mixer:
         # clip กันเสียงล้น (hard clipping) ตอนมีคนพูดพร้อมกันหลายคนเสียงดังรวมกัน
         mixed = np.clip(mixed, -32768, 32767).astype(np.int16)
         return mixed.tobytes()
+
+
+def mix_minus(main: bytes, rooms: dict) -> tuple:
+    """
+    โหมด conference: รับเฟรมห้องหลัก + {index ลูกน้อง: เฟรมของห้องย่อยนั้น}
+    คืน (เฟรมส่งเข้าห้องหลัก = ผลรวมทุกห้องย่อย, {index: เฟรมส่งเข้าห้องย่อยนั้น = ห้องหลัก + ห้องย่อยอื่น ไม่รวมของตัวเอง})
+    """
+    main_a = np.frombuffer(main, dtype=np.int16).astype(np.int32)
+    room_a = {i: np.frombuffer(f, dtype=np.int16).astype(np.int32) for i, f in rooms.items()}
+    rooms_sum = np.zeros_like(main_a)
+    for a in room_a.values():
+        rooms_sum += a
+    to_main = np.clip(rooms_sum, -32768, 32767).astype(np.int16).tobytes()
+    outs = {i: np.clip(main_a + rooms_sum - a, -32768, 32767).astype(np.int16).tobytes() for i, a in room_a.items()}
+    return to_main, outs
 
 
 class RelaySink(voice_recv.AudioSink):
@@ -351,32 +371,61 @@ class FrameBuffer:
     คิวเฟรมเสียงของบอทพูดแต่ละตัว — ปลอดภัยข้ามเธรด (ตัวเล่นเสียงของ discord.py อ่านจากเธรดของมันเอง
     ส่วน mixer_pump เขียนจาก event loop เดิมใช้ asyncio.Queue ซึ่งไม่ปลอดภัยข้ามเธรด)
     มีสำรองก่อนเล่น (prefill) กันนาฬิกา 2 ฝั่งเหลื่อมกันจนเกิดช่องเงียบสลับเสียง = เสียงแตก
+    สำรองปรับเองต่อบอทพูดแต่ละตัว: เสียงขาด (underrun) → เพิ่มทีละ 1 เฟรม · เงียบสนิท CALM_SECONDS → ลดทีละ 1 เฟรม
+    (pump ป้อนเฟรมเงียบเข้ามาตลอด ดังนั้น underrun ที่นับได้คือเน็ตสะดุดจริง ไม่ใช่แค่คนหยุดพูด)
     """
-    PREFILL = 3   # 60ms
-    MAXLEN = 15   # 300ms เกินนี้ทิ้งเฟรมเก่าสุด กันดีเลย์สะสม
+    PREFILL_MIN = 2       # 40ms
+    PREFILL_DEFAULT = 3   # 60ms (ค่าเริ่มต้นเท่าเดิม)
+    PREFILL_MAX = 6       # 120ms
+    CALM_SECONDS = 60
+    BASE_MAXLEN = 15      # 300ms
+    EXTRA_FRAMES = 12     # คิวเต็มที่ = สำรอง + 12 เฟรม (ไม่ต่ำกว่า BASE_MAXLEN) เกินนี้ทิ้งเฟรมเก่าสุด กันดีเลย์สะสม
 
-    def __init__(self):
-        self._q = deque(maxlen=self.MAXLEN)
+    def __init__(self, label: str = ""):
+        self.label = label
+        self.prefill = self.PREFILL_DEFAULT
+        self._q = deque()
         self._lock = threading.Lock()
         self._playing = False
+        self._last_change = time.monotonic()  # เวลาที่ underrun ล่าสุด/ปรับค่าล่าสุด (ไว้ตัดสินว่า "นิ่ง" พอจะลดสำรอง)
+
+    @property
+    def maxlen(self) -> int:
+        return max(self.BASE_MAXLEN, self.prefill + self.EXTRA_FRAMES)
 
     def put(self, frame: bytes):
         with self._lock:
-            if len(self._q) == self.MAXLEN:
-                health_inc("overflow")  # ค้างเกิน 300ms ต้องทิ้งเฟรมเก่า = ดีเลย์/หน่วง
+            if len(self._q) >= self.maxlen:
+                self._q.popleft()
+                health_inc("overflow")  # ค้างเกินคิวสูงสุด ต้องทิ้งเฟรมเก่า = ดีเลย์/หน่วง
             self._q.append(frame)
 
     def get(self) -> Optional[bytes]:
+        change = None  # (เก่า, ใหม่, เหตุผล) — เขียน log นอก lock
+        frame = None
         with self._lock:
             if not self._playing:
-                if len(self._q) < self.PREFILL:
-                    return None
-                self._playing = True
-            if not self._q:
-                self._playing = False
-                health_inc("underrun")  # กำลังเล่นแล้วเฟรมไม่มา = เสียงขาด/แตก
-                return None
-            return self._q.popleft()
+                if len(self._q) >= self.prefill:
+                    self._playing = True
+            if self._playing:
+                if not self._q:
+                    self._playing = False
+                    health_inc("underrun")  # กำลังเล่นแล้วเฟรมไม่มา = เสียงขาด/แตก
+                    now = time.monotonic()
+                    self._last_change = now
+                    if self.prefill < self.PREFILL_MAX:
+                        change = (self.prefill, self.prefill + 1, "เสียงขาด")
+                        self.prefill += 1
+                else:
+                    frame = self._q.popleft()
+                    now = time.monotonic()
+                    if self.prefill > self.PREFILL_MIN and now - self._last_change >= self.CALM_SECONDS:
+                        self._last_change = now
+                        change = (self.prefill, self.prefill - 1, "นิ่งแล้ว")
+                        self.prefill -= 1
+        if change:
+            log.info(f"[Speaker {self.label}] ปรับสำรองเสียง {change[0] * 20}ms → {change[1] * 20}ms ({change[2]})")
+        return frame
 
     def clear(self):
         with self._lock:
@@ -463,7 +512,9 @@ class SpeakerPool:
 
     def __init__(self, speaker_bots: list):
         self.speaker_bots = speaker_bots
-        self.queues: list = [FrameBuffer() for _ in speaker_bots]
+        self.queues: list = [FrameBuffer(i + 1) for i in range(len(speaker_bots))]
+        self.room_mixers: list = [Mixer() for _ in speaker_bots]  # เสียงที่ลูกน้องฟังได้จากห้องย่อยตัวเอง (โหมด conference)
+        self._listen_cache: dict = {}  # index -> (เวลา, มีคนฟังไหม) จำผล 1 วินาที
         self.owner: dict = {}              # index -> RelayUnit ที่กำลังใช้ index นี้ "สด" อยู่ตอนนี้ (connect อยู่จริง)
         self.channel_map: dict = {}        # index -> channel_id (ไว้โชว์ /relay status)
         self.guild_map: dict = {}          # index -> guild_id (ไว้นับโควต้าลูกน้องต่อเซิร์ฟเวอร์)
@@ -489,12 +540,29 @@ class SpeakerPool:
         self.channel_map.pop(index, None)
         self.guild_map.pop(index, None)
         self.queues[index].clear()
+        self.room_mixers[index].drop_all()
+        self._listen_cache.pop(index, None)
 
     def indices_for(self, unit) -> list:
         return [i for i, owner in self.owner.items() if owner is unit]
 
     def total_in_use(self) -> int:
         return len(self.owner)
+
+    def has_listeners(self, index: int) -> bool:
+        """ห้องของลูกน้องตัวนี้มีคน (ไม่ใช่บอท) ฟังอยู่ไหม — จำผล 1 วินาที / มองไม่เห็นห้อง = ถือว่ามี (ปลอดภัยไว้ก่อน)"""
+        now = time.monotonic()
+        cached = self._listen_cache.get(index)
+        if cached is not None and now - cached[0] < 1.0:
+            return cached[1]
+        ok = True
+        cid = self.channel_map.get(index)
+        if cid:
+            ch = self.speaker_bots[index].get_channel(cid)
+            if ch is not None:
+                ok = _count_humans(ch) > 0
+        self._listen_cache[index] = (now, ok)
+        return ok
 
     def in_use_for_guild(self, guild_id: int) -> int:
         return sum(1 for g in self.guild_map.values() if g == guild_id)
@@ -560,6 +628,10 @@ class RelayUnit:
         self.speaker_bindings: dict = {}  # index -> {"channel_id": ...}
         self.guild_id: Optional[int] = None  # guild ที่กำลังฟังอยู่ตอนนี้ (ไว้คิดโควต้า)
         self.last_speaking_error: Optional[str] = None  # "quota" | "not_invited" | None — อ่านหลังเรียก start_speaking*
+        self._bindings_restored = False  # โหลดการผูกจาก DB กลับมาแล้วหรือยัง (ทำครั้งเดียวตอน on_ready ครั้งแรก)
+        # โหมด conference (/relay conference): สองทางแบบ mix-minus — เก็บในหน่วยความจำ deploy ใหม่กลับเป็นปิด
+        self.conference = False
+        self.listener_out = FrameBuffer("หัวหน้า")  # เสียงที่หัวหน้าเล่นกลับเข้าห้องหลัก (เฉพาะโหมด conference)
 
         intents = discord.Intents.default()
         intents.voice_states = True
@@ -604,6 +676,38 @@ class RelayUnit:
             return False
         return True
 
+    # ── เก็บ/โหลดการผูกห้อง-ล็อกคนลง DB (deploy ใหม่แล้วไม่หาย) ──
+
+    async def persist_bindings(self):
+        """บันทึกการผูกปัจจุบันของหัวหน้าตัวนี้ลง DB — พังก็แค่เตือน ไม่ให้คำสั่งล้ม"""
+        try:
+            await access.save_unit_bindings(self.unit_no, self.listener_binding, self.speaker_bindings)
+        except Exception as e:
+            log.warning(f"[{self.name}] บันทึกการผูกลง DB ไม่ได้: {e}")
+
+    async def restore_bindings(self):
+        """โหลดการผูกจาก DB กลับเข้าหน่วยความจำ (ครั้งเดียว) — ส่วนเข้าห้องจริงให้ watchdog/voice event ทำต่อเอง"""
+        if self._bindings_restored:
+            return
+        self._bindings_restored = True
+        try:
+            listener, speakers = await access.load_unit_bindings(self.unit_no)
+        except Exception as e:
+            log.warning(f"[{self.name}] โหลดการผูกจาก DB ไม่ได้: {e}")
+            return
+        if listener and not self.listener_binding.get("channel_id") and not self.listener_binding.get("user_id"):
+            self.listener_binding.clear()
+            self.listener_binding.update(listener)
+        restored = 0
+        for idx0, b in speakers.items():
+            if idx0 >= len(self.pool.speaker_bots) or idx0 in self.speaker_bindings:
+                continue
+            if self.pool.try_bind(idx0, self) is None:
+                self.speaker_bindings[idx0] = b
+                restored += 1
+        if listener or restored:
+            log.info(f"[{self.name}] โหลดการผูกจาก DB: หัวหน้า {'มี' if listener else 'ไม่มี'} · ลูกน้อง {restored} ตัว")
+
     # ── connect/disconnect ──
 
     async def start_listening(self, channel: Union[discord.VoiceChannel, discord.StageChannel]):
@@ -617,6 +721,9 @@ class RelayUnit:
         await ensure_voice_region(channel)
         listener_vc = await channel.connect(cls=voice_recv.VoiceRecvClient)
         listener_vc.listen(RelaySink(self.mixer, self.role_filter))
+        if self.conference:
+            self.listener_out.clear()
+            listener_vc.play(QueueAudioSource(self.listener_out))
         self.relay_active = True
         self.guild_id = channel.guild.id
         log.info(f"[{self.name}] เข้าห้อง {channel.name} แล้ว")
@@ -626,6 +733,7 @@ class RelayUnit:
         if not self.relay_active:
             return
         self.relay_active = False
+        self.listener_out.clear()
         for guild in self.bot.guilds:
             if guild.voice_client:
                 await guild.voice_client.disconnect(force=True)
@@ -670,7 +778,12 @@ class RelayUnit:
             return False
 
         await ensure_voice_region(channel)  # แก้ผ่านหัวหน้า (มักมีสิทธิ์มากกว่าลูกน้อง)
-        vc = await target_channel.connect()
+        if self.conference:
+            # สองทาง: ลูกน้องฟังเสียงห้องย่อยของตัวเองด้วย (บอทถูกกรองใน RelaySink จึงไม่ได้ยินเสียงที่ตัวเองเล่น)
+            vc = await target_channel.connect(cls=voice_recv.VoiceRecvClient)
+            vc.listen(RelaySink(self.pool.room_mixers[index], {"role_id": None}))
+        else:
+            vc = await target_channel.connect()
         vc.play(QueueAudioSource(self.pool.queues[index]))
         self.pool.channel_map[index] = channel.id
         self.pool.guild_map[index] = channel.guild.id
@@ -807,6 +920,7 @@ class RelayUnit:
         async def relay_bindlistener(interaction: discord.Interaction, channel: Union[discord.VoiceChannel, discord.StageChannel]):
             unit.listener_binding.clear()
             unit.listener_binding["channel_id"] = channel.id
+            await unit.persist_bindings()
             await interaction.response.send_message(
                 f"🔗 ผูก {unit.name} กับห้อง {channel.mention} แล้ว\n"
                 f"ต่อไปนี้: มีคนเข้าห้องนี้ (คนแรก) → {unit.name} ตามเข้าอัตโนมัติ / ห้องว่าง (คนสุดท้ายออก) → ตามออกอัตโนมัติ",
@@ -839,6 +953,7 @@ class RelayUnit:
                 )
 
             unit.speaker_bindings[idx0] = {"channel_id": channel.id}
+            await unit.persist_bindings()
             await interaction.response.send_message(
                 f"🔗 ผูกบอทพูดตัวที่ {index} กับห้อง {channel.mention} แล้ว ({unit.name})\n"
                 f"ต่อไปนี้: มีคนเข้าห้องนี้ (คนแรก) → บอทพูดตัวที่ {index} ตามเข้าอัตโนมัติ / ห้องว่าง → บอทตามออกอัตโนมัติ",
@@ -895,6 +1010,7 @@ class RelayUnit:
                 unit.speaker_bindings[idx0] = {"channel_id": channel.id}
                 success_lines.append(f"🔗 บอทพูดตัวที่ {idx0 + 1} → {channel.mention}")
 
+            await unit.persist_bindings()
             header = f"ผูกสำเร็จ {len(success_lines)}/{len(channels)} ห้อง ({unit.name})"
             lines = [header] + success_lines + fail_lines
             lines.append("")
@@ -999,6 +1115,7 @@ class RelayUnit:
                         note = f" (เข้าไม่ได้: {e})"
                 lines.append(f"🔗 ลูกน้อง {idx0 + 1} → {r.mention}{note}")
 
+            await unit.persist_bindings()
             lines.insert(0, f"ผูกอัตโนมัติสำเร็จ {ok}/{len(rooms)} ห้อง")
             lines.append("")
             lines.append("ต่อไปนี้: ห้องไหนมีคนเข้า → บอทเข้าเอง / ห้องว่าง → บอทออกเอง · ยกเลิกด้วย `/relay unbind`")
@@ -1067,6 +1184,7 @@ class RelayUnit:
             unit.listener_binding.clear()
             unit.listener_binding.update(user_id=user.id, guild_id=interaction.guild.id,
                                          channel_id=channel.id if channel else None)
+            await unit.persist_bindings()
             target = follow_target(unit.bot, unit.listener_binding)
             note = ""
             if target is not None:
@@ -1105,6 +1223,7 @@ class RelayUnit:
             binding = {"user_id": user.id, "guild_id": interaction.guild.id,
                        "channel_id": channel.id if channel else None}
             unit.speaker_bindings[idx0] = binding
+            await unit.persist_bindings()
             note = ""
             target = follow_target(unit.bot, binding)
             if target is not None and unit.relay_active:
@@ -1132,9 +1251,34 @@ class RelayUnit:
             for idx0 in list(unit.speaker_bindings.keys()):
                 pool.release_bind(idx0, unit)
             unit.speaker_bindings.clear()
+            await unit.persist_bindings()
             await interaction.response.send_message("🔓 ยกเลิกการผูกอัตโนมัติทั้งหมดแล้ว (ยังใช้คำสั่งแบบ manual ได้ปกติ)", ephemeral=True)
 
-        @relay_group.command(name="health", description="ตัวเฝ้าเสียง: เช็คเสียงขาด/ดีเลย์/ปิง/บอทหลุด ในนาทีล่าสุด")
+        @relay_group.command(name="conference", description="โหมดสองทาง: ห้องหลักและห้องย่อยได้ยินกันและกัน (ไม่ได้ยินเสียงตัวเองกลับ)")
+        @has_relay_perms()
+        @app_commands.describe(mode="เปิด = สองทาง (mix-minus) · ปิด = ทางเดียวเหมือนเดิม")
+        @app_commands.choices(mode=[
+            app_commands.Choice(name="เปิด", value="on"),
+            app_commands.Choice(name="ปิด", value="off"),
+        ])
+        async def relay_conference(interaction: discord.Interaction, mode: app_commands.Choice[str]):
+            on = mode.value == "on"
+            if on == unit.conference:
+                return await interaction.response.send_message(
+                    f"โหมด conference {'เปิด' if on else 'ปิด'}อยู่แล้ว", ephemeral=True)
+            unit.conference = on
+            if not on:
+                unit.listener_out.clear()
+                for idx0 in pool.indices_for(unit):
+                    pool.room_mixers[idx0].drop_all()
+            await interaction.response.send_message(
+                f"{'🔁 เปิด' if on else '➡️ ปิด'}โหมด conference ของ {unit.name} แล้ว\n"
+                + ("มีผลตอนบอทเข้าห้องครั้งถัดไป — ถ้าบอทอยู่ในห้องแล้ว ให้ `/relay stop` แล้วเริ่มใหม่ (หรือรอให้ห้องว่างแล้วมีคนเข้า)\n"
+                   "ห้องหลักได้ยินทุกห้องย่อย · แต่ละห้องย่อยได้ยินห้องหลักและห้องย่อยอื่น ไม่ได้ยินเสียงตัวเอง"
+                   if on else "กลับไปทางเดียวแล้ว"),
+                ephemeral=True)
+
+        @relay_group.command(name="health",description="ตัวเฝ้าเสียง: เช็คเสียงขาด/ดีเลย์/ปิง/บอทหลุด ในนาทีล่าสุด")
         async def relay_health(interaction: discord.Interaction):
             h = LAST_HEALTH
             if not h:
@@ -1467,6 +1611,7 @@ class RelayUnit:
                 log.info(f"[{unit.name}] Synced {len(synced)} commands")
             except Exception as e:
                 log.error(f"[{unit.name}] Sync failed: {e}")
+            await unit.restore_bindings()
 
         @self.bot.event
         async def on_voice_state_update(member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
@@ -1873,13 +2018,33 @@ async def mixer_pump(units: list, pool: SpeakerPool):
             # (ไม่มีใครมาดึงออกไปใช้) พอมีบอทพูดต่อเข้ามาทีหลัง เสียงค้างทั้งหมดจะไหลออกมาทีเดียว
             # ฟังดูเหมือน "เสียงอัดเทป" เพราะเป็นเสียงที่พูดไปนานแล้วเพิ่งมาเล่นทีหลัง ไม่ realtime
             # — pop ทิ้งทุก tick เพื่อให้ buffer โตเท่าที่ไม่มีคนฟังเท่านั้น ไม่สะสมข้ามช่วงเวลา
-            frame = unit.mixer.pop_frame()
             my_indices = pool.indices_for(unit)
-            if not my_indices:
+            # ห้องย่อยที่ไม่มีคนฟังเลย ไม่ป้อนเฟรมให้ (ล้างคิวทิ้ง) — ถ้าไม่มีห้องไหนมีคนฟังเลย ข้ามการผสมเสียงทั้งหมด
+            active = {i for i in my_indices if pool.has_listeners(i)}
+            if unit.conference:
+                # สองทาง (mix-minus): ห้องหลักได้ผลรวมทุกห้องย่อย / แต่ละห้องย่อยได้ห้องหลัก+ห้องย่อยอื่น (ไม่รวมตัวเอง)
+                main = unit.mixer.pop_frame()
+                rooms = {i: pool.room_mixers[i].pop_frame() for i in my_indices}  # ดึงทุกตัวเพื่อไม่ให้ค้างสะสม
+                to_main, outs = mix_minus(main, rooms)
+                unit.listener_out.put(to_main)
+                for idx in my_indices:
+                    if idx in active:
+                        pool.queues[idx].put(outs[idx])
+                    else:
+                        pool.queues[idx].clear()
                 continue
+            if not active:
+                unit.mixer.drop_all()
+                for idx in my_indices:
+                    pool.queues[idx].clear()
+                continue
+            frame = unit.mixer.pop_frame()
             for idx in my_indices:
-                # FrameBuffer ทิ้งเฟรมเก่าสุดเองเมื่อเต็ม กันดีเลย์สะสม
-                pool.queues[idx].put(frame)
+                if idx in active:
+                    # FrameBuffer ทิ้งเฟรมเก่าสุดเองเมื่อเต็ม กันดีเลย์สะสม
+                    pool.queues[idx].put(frame)
+                else:
+                    pool.queues[idx].clear()
 
 
 # Health check
