@@ -4,6 +4,7 @@ import asyncio
 import logging
 import csv
 import io
+import json
 import difflib
 from datetime import datetime, timezone
 from typing import Optional, Union
@@ -11,7 +12,7 @@ from zoneinfo import ZoneInfo
 
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 from dotenv import load_dotenv
 from aiohttp import web
 
@@ -313,6 +314,8 @@ async def on_ready():
         log.error(f"Sync failed: {e}")
     await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="ห้องเสียง | /voice now"))
     asyncio.create_task(start_health_server())
+    if not update_counters.is_running():
+        update_counters.start()
 
 
 # ─────────────────────────────────────────────
@@ -2280,6 +2283,503 @@ tree.add_command(party_group)
 
 
 # ─────────────────────────────────────────────
+# สถิติแบบ Statbot: การ์ดผู้ใช้ (/me /user), อันดับ (/top), สรุปเซิร์ฟเวอร์ (/stats)
+# นับจากเวลาในห้องเสียงที่ยามเก็บไว้ใน voice_sessions (เฉพาะห้องที่ /track add ไว้)
+# ─────────────────────────────────────────────
+
+# วินาทีของแต่ละ session — session ที่ยังไม่จบ (left_at ว่าง) นับถึงเวลาปัจจุบัน
+_SESSION_SECONDS = "COALESCE(duration_seconds, EXTRACT(EPOCH FROM (NOW() - joined_at))::INT)"
+
+CARD_BG = "#1b1d21"
+CARD_PANEL = "#272a31"
+CARD_TEXT = "#f2f3f5"
+CARD_MUTED = "#9aa0aa"
+CARD_ACCENT = "#5865F2"
+CARD_PINK = "#eb459e"
+
+
+def _fmt_hours(seconds) -> str:
+    return f"{(seconds or 0) / 3600:.2f}"
+
+
+async def _fetch_user_voice_stats(guild_id: int, user_id: int) -> dict:
+    """ดึงสถิติเสียง 30 วันล่าสุดของสมาชิก 1 คน: ชั่วโมง 1/7/30 วัน, อันดับ, ห้องที่อยู่บ่อย, ยอดรายวัน"""
+    pool = await db.get_pool()
+    periods = await pool.fetchrow(
+        f"""
+        SELECT
+            COALESCE(SUM({_SESSION_SECONDS}) FILTER (WHERE joined_at >= NOW() - INTERVAL '1 day'), 0) AS d1,
+            COALESCE(SUM({_SESSION_SECONDS}) FILTER (WHERE joined_at >= NOW() - INTERVAL '7 days'), 0) AS d7,
+            COALESCE(SUM({_SESSION_SECONDS}), 0) AS d30
+        FROM voice_sessions
+        WHERE guild_id = $1 AND user_id = $2 AND joined_at >= NOW() - INTERVAL '30 days'
+        """,
+        guild_id, user_id
+    )
+    rank_row = await pool.fetchrow(
+        f"""
+        SELECT rn, total_users FROM (
+            SELECT user_id,
+                   RANK() OVER (ORDER BY SUM({_SESSION_SECONDS}) DESC) AS rn,
+                   COUNT(*) OVER () AS total_users
+            FROM voice_sessions
+            WHERE guild_id = $1 AND joined_at >= NOW() - INTERVAL '30 days'
+            GROUP BY user_id
+        ) t WHERE user_id = $2
+        """,
+        guild_id, user_id
+    )
+    channels = await pool.fetch(
+        f"""
+        SELECT channel_id, SUM({_SESSION_SECONDS}) AS total
+        FROM voice_sessions
+        WHERE guild_id = $1 AND user_id = $2 AND joined_at >= NOW() - INTERVAL '30 days'
+        GROUP BY channel_id ORDER BY total DESC LIMIT 3
+        """,
+        guild_id, user_id
+    )
+    daily = await pool.fetch(
+        f"""
+        SELECT (joined_at AT TIME ZONE 'Asia/Bangkok')::date AS day, SUM({_SESSION_SECONDS}) / 60.0 AS minutes
+        FROM voice_sessions
+        WHERE guild_id = $1 AND user_id = $2 AND joined_at >= NOW() - INTERVAL '30 days'
+        GROUP BY day ORDER BY day
+        """,
+        guild_id, user_id
+    )
+    return {
+        "d1": int(periods["d1"]), "d7": int(periods["d7"]), "d30": int(periods["d30"]),
+        "rank": int(rank_row["rn"]) if rank_row else None,
+        "total_users": int(rank_row["total_users"]) if rank_row else 0,
+        "channels": [dict(r) for r in channels],
+        "daily": [(r["day"], float(r["minutes"] or 0)) for r in daily],
+    }
+
+
+def _render_user_card(name: str, guild_name: str, joined_text: str, stats: dict,
+                      channel_names: list, avatar_bytes: Optional[bytes]) -> io.BytesIO:
+    """วาดการ์ดสถิติเสียงของสมาชิกเป็นรูป (ธีมมืด แบบ Statbot) — ทำงานใน thread แยกได้ ไม่แตะ discord object"""
+    from matplotlib.patches import FancyBboxPatch
+
+    fig = plt.figure(figsize=(8, 4.8), facecolor=CARD_BG)
+    bg = fig.add_axes([0, 0, 1, 1])
+    bg.set_xlim(0, 1)
+    bg.set_ylim(0, 1)
+    bg.axis("off")
+
+    def panel(x, y, w, h):
+        bg.add_patch(FancyBboxPatch(
+            (x, y), w, h, boxstyle="round,pad=0,rounding_size=0.02", mutation_aspect=0.6,
+            fc=CARD_PANEL, ec="none", transform=bg.transAxes
+        ))
+
+    def text(x, y, s, size=10, color=CARD_TEXT, ha="left", weight="normal"):
+        bg.text(x, y, s, fontsize=size, color=color, ha=ha, va="center", fontweight=weight)
+
+    # หัวการ์ด: รูปโปรไฟล์ + ชื่อ + ชื่อเซิร์ฟเวอร์ + วันที่เข้าร่วม
+    if avatar_bytes:
+        try:
+            from PIL import Image
+            img = Image.open(io.BytesIO(avatar_bytes)).convert("RGBA")
+            ax_av = fig.add_axes([0.03, 0.79, 0.10, 0.1667])
+            ax_av.imshow(img)
+            ax_av.axis("off")
+        except Exception as e:
+            log.warning(f"วาดรูปโปรไฟล์ในการ์ดไม่สำเร็จ: {e}")
+    text(0.16, 0.895, name[:28], size=17, weight="bold")
+    text(0.16, 0.83, guild_name[:40], size=10, color=CARD_MUTED)
+    text(0.97, 0.895, "เข้าเซิร์ฟเวอร์เมื่อ", size=8, color=CARD_MUTED, ha="right")
+    text(0.97, 0.84, joined_text, size=11, ha="right", weight="bold")
+
+    # แถวบน 3 ช่อง: อันดับ / ชั่วโมง / ห้องที่อยู่บ่อย
+    panel(0.03, 0.40, 0.30, 0.36)
+    text(0.05, 0.725, "อันดับเสียง (30 วัน)", size=10, color=CARD_MUTED)
+    if stats["rank"]:
+        text(0.18, 0.59, f"#{stats['rank']}", size=30, color=CARD_ACCENT, ha="center", weight="bold")
+        text(0.18, 0.46, f"จาก {stats['total_users']} คน", size=9, color=CARD_MUTED, ha="center")
+    else:
+        text(0.18, 0.55, "ยังไม่มีข้อมูล", size=12, color=CARD_MUTED, ha="center")
+
+    panel(0.35, 0.40, 0.30, 0.36)
+    text(0.37, 0.725, "ชั่วโมงในห้องเสียง", size=10, color=CARD_MUTED)
+    for i, (label, key) in enumerate((("1 วัน", "d1"), ("7 วัน", "d7"), ("30 วัน", "d30"))):
+        y = 0.64 - i * 0.075
+        text(0.37, y, label, size=10, color=CARD_MUTED)
+        text(0.63, y, f"{_fmt_hours(stats[key])} ชม.", size=11, ha="right", weight="bold")
+
+    panel(0.67, 0.40, 0.30, 0.36)
+    text(0.69, 0.725, "ห้องที่อยู่บ่อย", size=10, color=CARD_MUTED)
+    if channel_names:
+        for i, (cname, secs) in enumerate(channel_names):
+            y = 0.64 - i * 0.075
+            text(0.69, y, cname[:14], size=10)
+            text(0.95, y, f"{_fmt_hours(secs)} ชม.", size=10, ha="right", weight="bold", color=CARD_PINK)
+    else:
+        text(0.69, 0.60, "ยังไม่มีข้อมูล", size=10, color=CARD_MUTED)
+
+    # แถวล่าง: กราฟยอดรายวัน
+    panel(0.03, 0.07, 0.94, 0.30)
+    text(0.05, 0.34, "กิจกรรมรายวัน (ชั่วโมง)", size=10, color=CARD_MUTED)
+    if stats["daily"]:
+        ax = fig.add_axes([0.08, 0.11, 0.86, 0.17], facecolor=CARD_PANEL)
+        days = [d for d, _ in stats["daily"]]
+        hours = [m / 60 for _, m in stats["daily"]]
+        ax.plot(days, hours, color=CARD_PINK, linewidth=2, marker="o", markersize=3)
+        ax.fill_between(days, hours, alpha=0.18, color=CARD_PINK)
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%d/%m"))
+        ax.tick_params(colors=CARD_MUTED, labelsize=7)
+        ax.set_ylim(bottom=0)
+        ax.grid(True, alpha=0.15)
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+    else:
+        text(0.5, 0.20, "ยังไม่มีข้อมูลใน 30 วันล่าสุด", size=10, color=CARD_MUTED, ha="center")
+
+    text(0.03, 0.03, "ช่วงข้อมูล: 30 วันล่าสุด — เขตเวลา: Asia/Bangkok", size=7, color=CARD_MUTED)
+    text(0.97, 0.03, "Powered by ยาม", size=7, color=CARD_MUTED, ha="right")
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=140, facecolor=CARD_BG)
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
+async def _send_user_card(interaction: discord.Interaction, member: discord.Member):
+    await interaction.response.defer()
+    stats = await _fetch_user_voice_stats(interaction.guild.id, member.id)
+    channel_names = []
+    for r in stats["channels"]:
+        ch = interaction.guild.get_channel(r["channel_id"])
+        channel_names.append((ch.name if ch else "ห้องที่ถูกลบ", float(r["total"] or 0)))
+
+    avatar_bytes = None
+    try:
+        avatar_bytes = await member.display_avatar.replace(size=128, format="png").read()
+    except Exception as e:
+        log.warning(f"ดึงรูปโปรไฟล์ของ {member.id} ไม่สำเร็จ: {e}")
+
+    joined = member.joined_at.astimezone(BANGKOK_TZ).strftime("%d/%m/%Y") if member.joined_at else "-"
+    buf = await asyncio.to_thread(
+        _render_user_card, member.display_name, interaction.guild.name, joined, stats, channel_names, avatar_bytes
+    )
+    await interaction.followup.send(file=discord.File(buf, filename="voice_card.png"))
+
+
+@tree.command(name="me", description="ดูการ์ดสถิติเสียงของตัวเอง (30 วันล่าสุด)")
+@app_commands.guild_only()
+async def me_cmd(interaction: discord.Interaction):
+    await _send_user_card(interaction, interaction.user)
+
+
+@tree.command(name="user", description="ดูการ์ดสถิติเสียงของสมาชิกที่เลือก (30 วันล่าสุด)")
+@app_commands.guild_only()
+@app_commands.describe(member="สมาชิกที่ต้องการดู")
+async def user_cmd(interaction: discord.Interaction, member: discord.Member):
+    await _send_user_card(interaction, member)
+
+
+@tree.command(name="top", description="จัดอันดับคนที่อยู่ห้องเสียงนานที่สุด")
+@app_commands.guild_only()
+@app_commands.describe(
+    days="ย้อนหลังกี่วัน (ค่าเริ่มต้น 30 วัน)",
+    channel="ดูเฉพาะห้องเสียงนี้ (ไม่ใส่ = รวมทุกห้องที่ติดตาม)"
+)
+async def top_cmd(
+    interaction: discord.Interaction,
+    days: app_commands.Range[int, 1, 365] = 30,
+    channel: Optional[TrackableChannel] = None
+):
+    await interaction.response.defer()
+    pool = await db.get_pool()
+    args = [interaction.guild.id, str(days)]
+    channel_sql = ""
+    if channel is not None:
+        channel_sql = " AND channel_id = $3"
+        args.append(channel.id)
+    rows = await pool.fetch(
+        f"""
+        SELECT user_id, SUM({_SESSION_SECONDS}) AS total
+        FROM voice_sessions
+        WHERE guild_id = $1 AND joined_at >= NOW() - ($2 || ' days')::interval{channel_sql}
+        GROUP BY user_id ORDER BY total DESC LIMIT 15
+        """,
+        *args
+    )
+    scope = channel.mention if channel else "ทุกห้องที่ติดตาม"
+    if not rows:
+        return await interaction.followup.send(f"ยังไม่มีข้อมูลใน {days} วันล่าสุด ({scope})")
+
+    medals = {1: "🥇", 2: "🥈", 3: "🥉"}
+    lines = [
+        f"{medals.get(i, f'`{i}.`')} <@{r['user_id']}> — **{_fmt_hours(r['total'])} ชม.**"
+        for i, r in enumerate(rows, 1)
+    ]
+    embed = discord.Embed(
+        title="🏆 อันดับห้องเสียง",
+        description="\n".join(lines),
+        color=0xFEE75C,
+        timestamp=datetime.now(timezone.utc)
+    )
+    embed.set_footer(text=f"ช่วงเวลา: {days} วันล่าสุด")
+    embed.add_field(name="ขอบเขต", value=scope, inline=False)
+    await interaction.followup.send(embed=embed)
+
+
+@tree.command(name="stats", description="สรุปสถิติเสียงของทั้งเซิร์ฟเวอร์ (30 วันล่าสุด)")
+@app_commands.guild_only()
+async def stats_cmd(interaction: discord.Interaction):
+    await interaction.response.defer()
+    pool = await db.get_pool()
+    gid = interaction.guild.id
+    totals = await pool.fetchrow(
+        f"""
+        SELECT
+            COALESCE(SUM({_SESSION_SECONDS}) FILTER (WHERE joined_at >= NOW() - INTERVAL '1 day'), 0) AS d1,
+            COALESCE(SUM({_SESSION_SECONDS}) FILTER (WHERE joined_at >= NOW() - INTERVAL '7 days'), 0) AS d7,
+            COALESCE(SUM({_SESSION_SECONDS}), 0) AS d30,
+            COUNT(DISTINCT user_id) AS users
+        FROM voice_sessions
+        WHERE guild_id = $1 AND joined_at >= NOW() - INTERVAL '30 days'
+        """,
+        gid
+    )
+    if not totals or not int(totals["d30"]):
+        return await interaction.followup.send("ยังไม่มีข้อมูลเสียงใน 30 วันล่าสุด ใช้ `/track add` เพื่อเริ่มติดตามห้อง")
+
+    top_channels = await pool.fetch(
+        f"""
+        SELECT channel_id, SUM({_SESSION_SECONDS}) AS total
+        FROM voice_sessions WHERE guild_id = $1 AND joined_at >= NOW() - INTERVAL '30 days'
+        GROUP BY channel_id ORDER BY total DESC LIMIT 3
+        """,
+        gid
+    )
+    top_users = await pool.fetch(
+        f"""
+        SELECT user_id, SUM({_SESSION_SECONDS}) AS total
+        FROM voice_sessions WHERE guild_id = $1 AND joined_at >= NOW() - INTERVAL '30 days'
+        GROUP BY user_id ORDER BY total DESC LIMIT 3
+        """,
+        gid
+    )
+
+    embed = discord.Embed(
+        title=f"📊 สถิติเสียง {interaction.guild.name}",
+        color=0x5865F2,
+        timestamp=datetime.now(timezone.utc)
+    )
+    embed.add_field(
+        name="ชั่วโมงรวมทั้งเซิร์ฟเวอร์",
+        value=f"1 วัน: **{_fmt_hours(totals['d1'])}** ชม.\n7 วัน: **{_fmt_hours(totals['d7'])}** ชม.\n"
+              f"30 วัน: **{_fmt_hours(totals['d30'])}** ชม.",
+        inline=False
+    )
+    embed.add_field(name="คนที่เคยอยู่ในห้องเสียง (30 วัน)", value=f"**{int(totals['users'])}** คน", inline=False)
+    ch_lines = []
+    for r in top_channels:
+        ch = interaction.guild.get_channel(r["channel_id"])
+        ch_lines.append(f"{ch.mention if ch else 'ห้องที่ถูกลบ'} — {_fmt_hours(r['total'])} ชม.")
+    embed.add_field(name="ห้องที่คึกคักสุด", value="\n".join(ch_lines) or "-", inline=False)
+    medals = ["🥇", "🥈", "🥉"]
+    user_lines = [f"{medals[i]} <@{r['user_id']}> — {_fmt_hours(r['total'])} ชม." for i, r in enumerate(top_users)]
+    embed.add_field(name="คนที่อยู่นานสุด", value="\n".join(user_lines) or "-", inline=False)
+    embed.set_footer(text="นับเฉพาะห้องที่ติดตามไว้ด้วย /track add")
+    await interaction.followup.send(embed=embed)
+
+
+# ─────────────────────────────────────────────
+# ตัวนับบนชื่อห้อง (แบบ Statbot) — เปลี่ยนชื่อห้องอัตโนมัติตามตัวเลข
+# 1 ห้องใส่ได้สูงสุด 4 ตัวนับ ใช้ {1}..{4} ใน template (ไม่มีส่วนแจก/แก้ไขยศ)
+# ─────────────────────────────────────────────
+
+MAX_COUNTERS_PER_CHANNEL = 4
+CounterChannel = Union[discord.VoiceChannel, discord.StageChannel, discord.TextChannel, discord.CategoryChannel]
+
+# ชนิด -> (ชื่อที่แสดงในตัวเลือก, รูปแบบเริ่มต้น โดย {n} คือตำแหน่งตัวเลข)
+COUNTER_KINDS = {
+    "members": ("สมาชิกทั้งหมด", "👥 สมาชิก {n}"),
+    "humans": ("เฉพาะคน (ไม่รวมบอท)", "🙂 คน {n}"),
+    "bots": ("เฉพาะบอท", "🤖 บอท {n}"),
+    "voice": ("คนในห้องเสียงตอนนี้", "🔊 ในห้องเสียง {n}"),
+    "role": ("จำนวนคนที่มียศ (นับอย่างเดียว)", "🎭 ยศ {n}"),
+    "channels": ("จำนวนห้องทั้งหมด", "📁 ห้อง {n}"),
+    "roles": ("จำนวนยศทั้งหมด", "🏷️ ยศทั้งหมด {n}"),
+    "boosts": ("จำนวนบูสต์เซิร์ฟเวอร์", "🚀 บูสต์ {n}"),
+    "clock": ("นาฬิกา (เวลาไทย)", "🕒 {n}"),
+    "date": ("วันที่ (เวลาไทย)", "📅 {n}"),
+}
+
+
+def _counter_value(guild: discord.Guild, counter: dict) -> Optional[str]:
+    kind = counter.get("type")
+    if kind == "members":
+        return f"{guild.member_count:,}"
+    if kind == "humans":
+        return f"{sum(1 for m in guild.members if not m.bot):,}"
+    if kind == "bots":
+        return f"{sum(1 for m in guild.members if m.bot):,}"
+    if kind == "voice":
+        rooms = list(guild.voice_channels) + list(guild.stage_channels)
+        return f"{sum(1 for vc in rooms for m in vc.members if not m.bot):,}"
+    if kind == "role":
+        role = guild.get_role(counter.get("role_id") or 0)
+        return f"{len(role.members):,}" if role else None
+    if kind == "channels":
+        return f"{len(guild.channels):,}"
+    if kind == "roles":
+        return f"{max(len(guild.roles) - 1, 0):,}"  # ไม่นับ @everyone
+    if kind == "boosts":
+        return f"{guild.premium_subscription_count or 0:,}"
+    if kind == "clock":
+        return datetime.now(BANGKOK_TZ).strftime("%H:%M")
+    if kind == "date":
+        return datetime.now(BANGKOK_TZ).strftime("%d/%m/%Y")
+    return None
+
+
+def _render_counter_name(guild: discord.Guild, row) -> str:
+    counters = json.loads(row["counters"])
+    name = row["template"]
+    for i, counter in enumerate(counters, 1):
+        value = _counter_value(guild, counter)
+        name = name.replace(f"{{{i}}}", value if value is not None else "?")
+    return name[:100]
+
+
+async def _update_counter(guild: discord.Guild, row) -> None:
+    channel = guild.get_channel(row["channel_id"])
+    if channel is None:
+        return
+    try:
+        new_name = _render_counter_name(guild, row)
+    except Exception as e:
+        log.error(f"สร้างชื่อตัวนับของห้อง {row['channel_id']} ไม่สำเร็จ: {e}")
+        return
+    if channel.name == new_name:
+        return  # ชื่อเหมือนเดิม ไม่ต้องยิง API (กัน rate limit)
+    try:
+        await channel.edit(name=new_name, reason="อัปเดตตัวนับอัตโนมัติ")
+    except discord.Forbidden:
+        log.warning(f"ไม่มีสิทธิ์ Manage Channels เปลี่ยนชื่อห้อง {channel.id}")
+    except discord.HTTPException as e:
+        log.error(f"เปลี่ยนชื่อห้องตัวนับ {channel.id} ไม่สำเร็จ: {e}")
+
+
+# Discord จำกัดการเปลี่ยนชื่อห้อง 2 ครั้ง/10 นาที/ห้อง จึงอัปเดตทุก 10 นาที
+@tasks.loop(minutes=10)
+async def update_counters():
+    try:
+        pool = await db.get_pool()
+        rows = await pool.fetch("SELECT * FROM stat_counters")
+        for row in rows:
+            guild = bot.get_guild(row["guild_id"])
+            if guild:
+                await _update_counter(guild, row)
+                await asyncio.sleep(1)
+    except Exception as e:
+        log.error(f"อัปเดตตัวนับไม่สำเร็จ: {e}")
+
+
+counter_group = app_commands.Group(name="counter", description="ตัวนับสถิติบนชื่อห้อง (ห้องละไม่เกิน 4 ตัว)")
+
+
+@counter_group.command(name="add", description="เพิ่มตัวนับลงในชื่อห้อง")
+@app_commands.guild_only()
+@has_mod_perms()
+@app_commands.describe(
+    channel="ห้องที่จะให้ชื่อเปลี่ยนตามตัวเลข",
+    kind="ชนิดที่จะนับ",
+    role="ยศที่จะนับจำนวนคน (ใช้เมื่อเลือกชนิดยศ)",
+    template="รูปแบบชื่อทั้งห้อง ใช้ {1}..{4} แทนตัวนับ (ไม่ใส่ = ต่อท้ายรูปแบบเดิมให้อัตโนมัติ)"
+)
+@app_commands.choices(kind=[app_commands.Choice(name=v[0], value=k) for k, v in COUNTER_KINDS.items()])
+async def counter_add(
+    interaction: discord.Interaction,
+    channel: CounterChannel,
+    kind: app_commands.Choice[str],
+    role: Optional[discord.Role] = None,
+    template: Optional[str] = None
+):
+    if kind.value == "role" and role is None:
+        return await interaction.response.send_message("ชนิดยศต้องเลือก role ด้วย", ephemeral=True)
+
+    pool = await db.get_pool()
+    existing = await pool.fetchrow(
+        "SELECT * FROM stat_counters WHERE guild_id = $1 AND channel_id = $2",
+        interaction.guild.id, channel.id
+    )
+    counters = json.loads(existing["counters"]) if existing else []
+    if len(counters) >= MAX_COUNTERS_PER_CHANNEL:
+        return await interaction.response.send_message(
+            f"ห้องนี้มีตัวนับครบ {MAX_COUNTERS_PER_CHANNEL} ตัวแล้ว — ใช้ `/counter remove` ลบก่อนเพิ่มใหม่", ephemeral=True
+        )
+    counters.append({"type": kind.value, "role_id": role.id if role else None})
+    position = len(counters)
+
+    if template:
+        if not any(f"{{{i}}}" in template for i in range(1, position + 1)):
+            return await interaction.response.send_message(
+                f"รูปแบบชื่อต้องมี {{1}} ถึง {{{position}}} อย่างน้อย 1 ที่", ephemeral=True
+            )
+        new_template = template
+    else:
+        piece = COUNTER_KINDS[kind.value][1].replace("{n}", f"{{{position}}}")
+        new_template = f"{existing['template']} | {piece}" if existing else piece
+
+    await interaction.response.defer(ephemeral=True)
+    await pool.execute(
+        """
+        INSERT INTO stat_counters (guild_id, channel_id, template, counters)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (guild_id, channel_id) DO UPDATE SET template = $3, counters = $4
+        """,
+        interaction.guild.id, channel.id, new_template, json.dumps(counters)
+    )
+    row = await pool.fetchrow(
+        "SELECT * FROM stat_counters WHERE guild_id = $1 AND channel_id = $2",
+        interaction.guild.id, channel.id
+    )
+    await _update_counter(interaction.guild, row)
+    await interaction.followup.send(
+        f"✅ เพิ่มตัวนับลำดับที่ {position} ที่ {channel.mention} แล้ว (อัปเดตทุก 10 นาที)", ephemeral=True
+    )
+
+
+@counter_group.command(name="remove", description="ลบตัวนับทั้งหมดของห้อง (ชื่อห้องจะคงค่าล่าสุดไว้)")
+@app_commands.guild_only()
+@has_mod_perms()
+@app_commands.describe(channel="ห้องที่จะเลิกใช้ตัวนับ")
+async def counter_remove(interaction: discord.Interaction, channel: CounterChannel):
+    pool = await db.get_pool()
+    res = await pool.execute(
+        "DELETE FROM stat_counters WHERE guild_id = $1 AND channel_id = $2",
+        interaction.guild.id, channel.id
+    )
+    if res.endswith(" 0"):
+        return await interaction.response.send_message("ห้องนี้ไม่ได้ตั้งตัวนับไว้", ephemeral=True)
+    await interaction.response.send_message(f"🛑 ลบตัวนับของ {channel.mention} แล้ว", ephemeral=True)
+
+
+@counter_group.command(name="list", description="ดูตัวนับทั้งหมดในเซิร์ฟเวอร์")
+@app_commands.guild_only()
+async def counter_list(interaction: discord.Interaction):
+    pool = await db.get_pool()
+    rows = await pool.fetch("SELECT * FROM stat_counters WHERE guild_id = $1", interaction.guild.id)
+    if not rows:
+        return await interaction.response.send_message("ยังไม่มีตัวนับ ใช้ `/counter add`", ephemeral=True)
+    lines = []
+    for r in rows:
+        ch = interaction.guild.get_channel(r["channel_id"])
+        kinds = ", ".join(COUNTER_KINDS.get(c["type"], (c["type"],))[0] for c in json.loads(r["counters"]))
+        lines.append(f"- {ch.mention if ch else r['channel_id']} → {kinds}\n  รูปแบบ: `{r['template']}`")
+    await interaction.response.send_message("**ตัวนับที่ตั้งไว้:**\n" + "\n".join(lines), ephemeral=True)
+
+
+tree.add_command(counter_group)
+
+
+# ─────────────────────────────────────────────
 # เปิด/ปิดคำสั่ง (ต่อเซิร์ฟเวอร์)
 # ─────────────────────────────────────────────
 
@@ -2400,6 +2900,11 @@ async def help_cmd(interaction: discord.Interaction):
     embed.add_field(name="/voice stats", value="สรุปเวลารวมของแต่ละคนในห้อง (เลือกช่วงวันได้)", inline=False)
     embed.add_field(name="/voice export", value="ส่งออกข้อมูลเป็นไฟล์ CSV (เปิดด้วย Excel ได้)", inline=False)
     embed.add_field(name="/voice graph", value="ดูกราฟกิจกรรม (เวลารวมต่อวัน) แบบรูปภาพ", inline=False)
+    embed.add_field(name="/me", value="ดูการ์ดสถิติเสียงของตัวเอง (30 วันล่าสุด)", inline=False)
+    embed.add_field(name="/user", value="ดูการ์ดสถิติเสียงของสมาชิกที่เลือก", inline=False)
+    embed.add_field(name="/top", value="จัดอันดับคนที่อยู่ห้องเสียงนานที่สุด", inline=False)
+    embed.add_field(name="/stats", value="สรุปสถิติเสียงทั้งเซิร์ฟเวอร์", inline=False)
+    embed.add_field(name="/counter add | remove | list", value="ตัวนับบนชื่อห้อง ห้องละไม่เกิน 4 ตัว (แอดมิน)", inline=False)
     embed.add_field(name="/setup-introduction", value="โพสต์กระดานแนะนำตัวผู้เล่นในห้องที่เลือก (แอดมิน)", inline=False)
     embed.add_field(name="/setup-jobs", value="ตั้งค่า Role อาชีพที่จะให้เลือกตอนแนะนำตัว (แอดมิน)", inline=False)
     embed.add_field(name="/my-profile", value="ดูข้อมูลแนะนำตัวของตัวเอง", inline=False)
@@ -2422,7 +2927,14 @@ async def help_cmd(interaction: discord.Interaction):
     embed.add_field(name="/command-toggle", value="เปิด/ปิดคำสั่งของบอทในเซิร์ฟเวอร์นี้ เลือกได้หลายอันพร้อมกัน (แอดมิน)", inline=False)
     embed.add_field(name="/invite", value="รับลิงก์เชิญบอทพร้อม permission ครบ (รวม Manage Roles)", inline=False)
     embed.add_field(name="/ping", value="ตรวจสอบสถานะบอท", inline=False)
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    # Discord จำกัด 25 ช่องต่อ embed — คำสั่งเยอะกว่านั้นแล้ว จึงแบ่งเป็นหลาย embed
+    embeds = []
+    for i in range(0, len(embed.fields), 25):
+        part = discord.Embed(title=embed.title if i == 0 else None, color=embed.color)
+        for f in embed.fields[i:i + 25]:
+            part.add_field(name=f.name, value=f.value, inline=f.inline)
+        embeds.append(part)
+    await interaction.response.send_message(embeds=embeds, ephemeral=True)
 
 
 async def main():

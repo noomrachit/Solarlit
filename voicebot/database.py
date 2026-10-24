@@ -158,6 +158,17 @@ async def init_db():
                 command_name TEXT NOT NULL,
                 PRIMARY KEY (guild_id, command_name)
             );
+
+            -- ตัวนับบนชื่อห้อง (แบบ Statbot): 1 ห้องใส่ได้สูงสุด 4 ตัวนับ
+            -- counters = JSON list เช่น [{"type": "members", "role_id": null}]
+            -- template ใช้ {1}..{4} แทนค่าของตัวนับลำดับที่ 1..4
+            CREATE TABLE IF NOT EXISTS stat_counters (
+                guild_id BIGINT NOT NULL,
+                channel_id BIGINT NOT NULL,
+                template TEXT NOT NULL,
+                counters TEXT NOT NULL,
+                PRIMARY KEY (guild_id, channel_id)
+            );
             """
         )
 
