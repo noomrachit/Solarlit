@@ -2358,10 +2358,19 @@ async def _fetch_user_voice_stats(guild_id: int, user_id: int) -> dict:
 
 def _render_user_card(name: str, guild_name: str, joined_text: str, stats: dict,
                       channel_names: list, avatar_bytes: Optional[bytes]) -> io.BytesIO:
-    """วาดการ์ดสถิติเสียงของสมาชิกเป็นรูป (ธีมมืด แบบ Statbot) — ทำงานใน thread แยกได้ ไม่แตะ discord object"""
+    """วาดการ์ดสถิติเสียงของสมาชิกเป็นรูป (ธีมมืด แบบ Statbot) — ทำงานใน thread แยกได้ ไม่แตะ discord object
+    ปิด figure ใน finally เสมอ แม้วาดพลาดกลางทาง จะได้ไม่มี figure ค้างในหน่วยความจำ"""
+    fig = plt.figure(figsize=(8, 4.8), facecolor=CARD_BG)
+    try:
+        return _draw_user_card(fig, name, guild_name, joined_text, stats, channel_names, avatar_bytes)
+    finally:
+        plt.close(fig)
+
+
+def _draw_user_card(fig, name: str, guild_name: str, joined_text: str, stats: dict,
+                    channel_names: list, avatar_bytes: Optional[bytes]) -> io.BytesIO:
     from matplotlib.patches import FancyBboxPatch
 
-    fig = plt.figure(figsize=(8, 4.8), facecolor=CARD_BG)
     bg = fig.add_axes([0, 0, 1, 1])
     bg.set_xlim(0, 1)
     bg.set_ylim(0, 1)
@@ -2440,7 +2449,6 @@ def _render_user_card(name: str, guild_name: str, joined_text: str, stats: dict,
 
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=140, facecolor=CARD_BG)
-    plt.close(fig)
     buf.seek(0)
     return buf
 
@@ -2704,38 +2712,42 @@ async def counter_add(
     if kind.value == "role" and role is None:
         return await interaction.response.send_message("ชนิดยศต้องเลือก role ด้วย", ephemeral=True)
 
-    pool = await db.get_pool()
-    existing = await pool.fetchrow(
-        "SELECT * FROM stat_counters WHERE guild_id = $1 AND channel_id = $2",
-        interaction.guild.id, channel.id
-    )
-    counters = json.loads(existing["counters"]) if existing else []
-    if len(counters) >= MAX_COUNTERS_PER_CHANNEL:
-        return await interaction.response.send_message(
-            f"ห้องนี้มีตัวนับครบ {MAX_COUNTERS_PER_CHANNEL} ตัวแล้ว — ใช้ `/counter remove` ลบก่อนเพิ่มใหม่", ephemeral=True
-        )
-    counters.append({"type": kind.value, "role_id": role.id if role else None})
-    position = len(counters)
-
-    if template:
-        if not any(f"{{{i}}}" in template for i in range(1, position + 1)):
-            return await interaction.response.send_message(
-                f"รูปแบบชื่อต้องมี {{1}} ถึง {{{position}}} อย่างน้อย 1 ที่", ephemeral=True
-            )
-        new_template = template
-    else:
-        piece = COUNTER_KINDS[kind.value][1].replace("{n}", f"{{{position}}}")
-        new_template = f"{existing['template']} | {piece}" if existing else piece
-
     await interaction.response.defer(ephemeral=True)
-    await pool.execute(
-        """
-        INSERT INTO stat_counters (guild_id, channel_id, template, counters)
-        VALUES ($1, $2, $3, $4)
-        ON CONFLICT (guild_id, channel_id) DO UPDATE SET template = $3, counters = $4
-        """,
-        interaction.guild.id, channel.id, new_template, json.dumps(counters)
-    )
+    pool = await db.get_pool()
+    error = None
+    position = 0
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            # ล็อกต่อห้อง กันสั่งเพิ่มตัวนับห้องเดียวกันพร้อมกันแล้วตัวนับหาย (อ่าน-แก้-เขียนซ้อนกัน)
+            await conn.execute("SELECT pg_advisory_xact_lock($1)", channel.id)
+            existing = await conn.fetchrow(
+                "SELECT * FROM stat_counters WHERE guild_id = $1 AND channel_id = $2",
+                interaction.guild.id, channel.id
+            )
+            counters = json.loads(existing["counters"]) if existing else []
+            if len(counters) >= MAX_COUNTERS_PER_CHANNEL:
+                error = f"ห้องนี้มีตัวนับครบ {MAX_COUNTERS_PER_CHANNEL} ตัวแล้ว — ใช้ `/counter remove` ลบก่อนเพิ่มใหม่"
+            else:
+                counters.append({"type": kind.value, "role_id": role.id if role else None})
+                position = len(counters)
+                if template and not any(f"{{{i}}}" in template for i in range(1, position + 1)):
+                    error = f"รูปแบบชื่อต้องมี {{1}} ถึง {{{position}}} อย่างน้อย 1 ที่"
+                else:
+                    if template:
+                        new_template = template
+                    else:
+                        piece = COUNTER_KINDS[kind.value][1].replace("{n}", f"{{{position}}}")
+                        new_template = f"{existing['template']} | {piece}" if existing else piece
+                    await conn.execute(
+                        """
+                        INSERT INTO stat_counters (guild_id, channel_id, template, counters)
+                        VALUES ($1, $2, $3, $4)
+                        ON CONFLICT (guild_id, channel_id) DO UPDATE SET template = $3, counters = $4
+                        """,
+                        interaction.guild.id, channel.id, new_template, json.dumps(counters)
+                    )
+    if error:
+        return await interaction.followup.send(error, ephemeral=True)
     row = await pool.fetchrow(
         "SELECT * FROM stat_counters WHERE guild_id = $1 AND channel_id = $2",
         interaction.guild.id, channel.id
