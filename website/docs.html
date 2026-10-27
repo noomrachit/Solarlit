@@ -146,6 +146,14 @@ footer{border-top:1px solid var(--line);padding-top:24px;color:var(--muted);font
 /voice now channel:ห้องประชุมทีม
 /voice stats channel:ห้องประชุมทีม days:7
 /voice export channel:ห้องประชุมทีม days:30</pre></div>
+    <h3 class="group">สถิติเสียงแบบการ์ด</h3>
+    <div class="cards">
+      <div class="card"><div class="top"><span class="cmd">/me</span><span class="badge all">ทุกคน</span></div><p>การ์ดสถิติเสียงของตัวเอง 30 วันล่าสุด</p></div>
+      <div class="card"><div class="top"><span class="cmd">/user</span><span class="badge all">ทุกคน</span></div><div class="params"><span><b>member:</b> @ชื่อ</span></div><p>การ์ดสถิติเสียงของสมาชิกที่เลือก</p></div>
+      <div class="card"><div class="top"><span class="cmd">/top</span><span class="badge all">ทุกคน</span></div><p>จัดอันดับคนที่อยู่ห้องเสียงนานที่สุด</p></div>
+      <div class="card"><div class="top"><span class="cmd">/stats</span><span class="badge all">ทุกคน</span></div><p>สรุปสถิติเสียงทั้งเซิร์ฟเวอร์ 30 วันล่าสุด</p></div>
+      <div class="card"><div class="top"><span class="cmd">/counter add · remove · list</span><span class="badge">แอดมิน</span></div><p>ตัวนับสถิติบนชื่อห้อง อัปเดตเอง ห้องละไม่เกิน 4 ตัว</p></div>
+    </div>
     <h3 class="group">แนะนำตัวสมาชิก / จัดปาร์ตี้</h3>
     <div class="cards">
       <div class="card"><div class="top"><span class="cmd">/setup-introduction · /setup-playerboard</span><span class="badge">แอดมิน</span></div><p>ตั้งกระดานแนะนำตัวและรายชื่อสมาชิกแบบรูปภาพ สมาชิกจัดการโปรไฟล์ด้วย /my-profile และ /edit-profile</p></div>
@@ -171,7 +179,15 @@ footer{border-top:1px solid var(--line);padding-top:24px;color:var(--muted);font
       <div class="card"><div class="top"><span class="cmd">/relay unbind</span><span class="badge">แอดมิน</span></div><p>ยกเลิกการตั้งอัตโนมัติทั้งหมด</p></div>
     </div>
     <div class="example"><span class="label">ตัวอย่าง · ตั้งครั้งเดียวใช้ได้ทั้งวัน</span><pre>/relay name head:ผู้บัญชาการ speakers:ห้องทีม
-/relay go source:ห้องสั่งการ room1:ทีม-1 room2:ทีม-2 room3:ทีม-3</pre><p>หลังจากนี้ไม่ต้องพิมพ์อะไรอีก แค่เข้าห้องตามปกติ บอทตามเข้า-ออกให้เอง</p><p>ถ้าบอทรีสตาร์ท (เช่นตอนอัปเดตระบบ) ต้องพิมพ์ /relay go ใหม่อีกครั้ง</p></div>
+/relay go source:ห้องสั่งการ room1:ทีม-1 room2:ทีม-2 room3:ทีม-3</pre><p>หลังจากนี้ไม่ต้องพิมพ์อะไรอีก แค่เข้าห้องตามปกติ บอทตามเข้า-ออกให้เอง</p><p>ตั้งครั้งเดียวจำไว้ บอทรีสตาร์ทก็กลับมาเอง ไม่ต้องพิมพ์ใหม่</p></div>
+    <h3 class="group">ตั้งเวลาและแผงควบคุม</h3>
+    <div class="cards">
+      <div class="card"><div class="top"><span class="cmd">/relayschedule</span><span class="badge">แอดมิน</span></div><div class="params"><span><b>start:</b> 19:50</span><span><b>end:</b> 22:30</span><span><b>days:</b> จ-ศ</span></div><p>ตั้งเวลาให้หัวหน้า+ลูกน้องเข้าห้องที่ตั้งด้วย /relay go ไปรอก่อนคนมา หมดเวลาห้องว่างออกเอง ไม่ใส่อะไร = ดูตารางพร้อมปุ่มตั้งเวลา</p></div>
+      <div class="card"><div class="top"><span class="cmd">/relay panel</span><span class="badge">แอดมิน</span></div><p>กระดานปุ่มกดแทนการพิมพ์คำสั่ง /relay ทุกตัว</p></div>
+      <div class="card"><div class="top"><span class="cmd">/relay conference</span><span class="badge">แอดมิน</span></div><div class="params"><span><b>mode:</b> เปิด</span></div><p>โหมดสองทาง ห้องหลักกับห้องย่อยได้ยินกัน (ตั้งห้องรับเสียงกลับได้ด้วย /relay returnroom)</p></div>
+      <div class="card"><div class="top"><span class="cmd">/relay health · healthchannel</span><span class="badge">แอดมิน</span></div><p>เช็คสุขภาพเสียง หรือตั้งห้องสถานะที่อัปเดตทุกนาที</p></div>
+      <div class="card"><div class="top"><span class="cmd">/relaysave</span><span class="badge">แอดมิน</span></div><p>บันทึกการตั้งค่าทั้งหมด กลับมาเองหลังบอทรีสตาร์ท</p></div>
+    </div>
     <h3 class="group">สั่งเองทีละขั้น</h3>
     <div class="cards">
       <div class="card"><div class="top"><span class="cmd">/relay start</span><span class="badge">แอดมิน</span></div><div class="params"><span><b>source:</b> ห้องสั่งการ</span></div><p>เริ่มฟังห้องหลัก (ยังไม่ส่งเสียงไปไหนจนกว่าจะเพิ่มห้องย่อย)</p></div>
