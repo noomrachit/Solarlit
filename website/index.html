@@ -129,7 +129,7 @@ footer{border-top:1px solid var(--line);padding-top:24px;color:var(--muted);font
 <div class="wrap">
   <nav>
     <div class="brand"><span class="sunmark" aria-hidden="true"></span>Solarlit</div>
-    <div class="navlinks"><a href="#units">หน่วยบอท</a><a href="#commands">คำสั่ง</a><a href="#plans">แพ็กเกจ</a><a href="#invite">เชิญบอท</a><a href="#contact">ติดต่อ</a></div>
+    <div class="navlinks"><a href="#units">หน่วยบอท</a><a href="#commands">คำสั่ง</a><a href="#plans">สนับสนุน</a><a href="#invite">เชิญบอท</a><a href="#contact">ติดต่อ</a></div>
   </nav>
 
   <section class="hero">
@@ -137,6 +137,7 @@ footer{border-top:1px solid var(--line);padding-top:24px;color:var(--muted);font
       <div class="kicker">บอทดิสคอร์ดสำหรับกิลด์และเซิร์ฟเวอร์เกม</div>
       <h1>คุมเซิร์ฟเวอร์ด้วย <span>ทีมบอท</span> ไม่ใช่บอทตัวเดียว</h1>
       <p class="lead">ใจปูจัดคิวและดูแลห้อง ยามจดเวลาห้องเสียงและจัดปาร์ตี้ Voice Relay ส่งเสียงจากห้องสั่งการไปทุกห้องย่อยพร้อมกัน</p>
+      <p class="relay-note" style="max-width:56ch">📚 บอทนี้จัดทำเพื่อการศึกษาและทดลองเรียนรู้ ไม่ใช่บริการเชิงพาณิชย์</p>
       <div class="actions">
         <a class="btn primary" href="#invite">เชิญบอทเข้าเซิร์ฟเวอร์</a>
         <a class="btn" href="#commands">ค้นหาคำสั่ง</a>
@@ -144,7 +145,7 @@ footer{border-top:1px solid var(--line);padding-top:24px;color:var(--muted);font
       <div class="facts">
         <div><b>3</b>หน่วยบอท</div>
         <div><b>132</b>คำสั่ง</div>
-        <div><b>฿60</b>เริ่มต้นต่อเดือน</div>
+        <div><b>ฟรี</b>ใช้ได้ทุกเซิร์ฟเวอร์</div>
       </div>
     </div>
 
@@ -221,23 +222,21 @@ footer{border-top:1px solid var(--line);padding-top:24px;color:var(--muted);font
   </section>
 
   <section id="plans">
-    <div class="head"><h2>ราคา</h2><p>เริ่มต้น ฿60 ต่อเดือน จ่ายตามจำนวนบอท Voice Relay ที่ใช้ ตัวละ 10 บาท ทั้งหัวหน้าและลูกน้อง ใจปูกับยามใช้ได้ครบทุกฟีเจอร์</p></div>
+    <div class="head"><h2>สนับสนุนโครงการ</h2><p>บอทนี้จัดทำเพื่อการศึกษาและทดลองเรียนรู้ ไม่ใช่บริการเชิงพาณิชย์ ใช้งานได้ฟรีทุกเซิร์ฟเวอร์ หากอยากช่วยค่าเซิร์ฟเวอร์ โดเนทได้ตามกำลังและความสมัครใจ ผู้สนับสนุนได้สิทธิ์ใช้ Voice Relay เพิ่มขึ้น</p></div>
     <div class="calc">
       <div class="calc-in">
-        <label for="n-head">บอทหัวหน้า <b id="v-head">1</b> ตัว</label>
-        <input id="n-head" type="range" min="1" max="2" value="1">
-        <label for="n-spk">บอทลูกน้อง <b id="v-spk">5</b> ตัว <small>กระจายเสียงได้ <span id="v-rooms">5</span> ห้องพร้อมกัน</small></label>
-        <input id="n-spk" type="range" min="5" max="16" value="5">
-        <p class="calc-note">เริ่มต้นที่หัวหน้า 1 + ลูกน้อง 5 = ฿60 ต่อเดือน เพิ่มได้สูงสุดหัวหน้า 2 และลูกน้อง 16 ตัว</p>
+        <label>ใช้ฟรี</label>
+        <p class="calc-note" style="font-size:16px;color:var(--text)">ใจปู + ยาม ครบทุกฟีเจอร์ · Voice Relay บอทหัวหน้า 1 + บอทลูกน้อง 5 (กระจายเสียงได้ 5 ห้องพร้อมกัน)</p>
       </div>
       <div class="calc-out">
-        <div class="name"><span>รวม</span><span><span id="v-total">6</span> บอท × ฿10</span></div>
-        <div class="price">฿<span id="v-price">60</span> <small>/ เดือน</small></div>
+        <div class="name"><span>ผู้สนับสนุน</span><span>โดเนท</span></div>
+        <div class="price" style="font-size:26px">หัวหน้า 2 + ลูกน้อง 16</div>
+        <p class="calc-note">กระจายเสียงได้สูงสุด 16 ห้องพร้อมกัน เปิดให้โดยแอดมินหลังโดเนท</p>
       </div>
     </div>
     <div class="pay" id="pay">
-      <div><h3>วิธีจ่ายเงิน</h3><p>โอนพร้อมเพย์ แล้วพิมพ์ <code>/pay</code> ในเซิร์ฟเวอร์ของคุณพร้อมแนบสลิป ใช้บอทได้ทันทีระหว่างรอแอดมินตรวจ ตรวจผ่านแล้วได้ 30 วันเต็ม แจ้งผลทาง DM</p><p style="font-size:14px;color:var(--muted)">โอนทางทรูมันนี่ ส่งสลิปให้แอดมินเปิดให้</p></div>
-      <div class="pp"><div class="pp-qr"><svg shape-rendering="crispEdges" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 37 37" width="168" height="168" role="img" aria-label="QR พร้อมเพย์ Solarlit" class="segno"><path fill="#fff" d="M0 0h37v37h-37z"/><path class="qrline" stroke="#0b111c" d="M2 2.5h7m1 0h3m3 0h2m2 0h1m2 0h1m1 0h1m2 0h7m-33 1h1m5 0h1m1 0h2m2 0h1m1 0h1m2 0h1m2 0h1m2 0h1m2 0h1m5 0h1m-33 1h1m1 0h3m1 0h1m3 0h5m1 0h1m2 0h1m2 0h1m3 0h1m1 0h3m1 0h1m-33 1h1m1 0h3m1 0h1m1 0h1m1 0h1m1 0h1m2 0h1m2 0h2m4 0h1m1 0h1m1 0h3m1 0h1m-33 1h1m1 0h3m1 0h1m4 0h2m3 0h2m2 0h1m2 0h1m2 0h1m1 0h3m1 0h1m-33 1h1m5 0h1m4 0h2m1 0h3m3 0h2m1 0h1m2 0h1m5 0h1m-33 1h7m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h7m-25 1h3m2 0h1m1 0h2m2 0h2m2 0h2m-25 1h1m1 0h2m1 0h3m2 0h3m2 0h2m2 0h1m1 0h1m4 0h1m2 0h1m1 0h2m-32 1h2m4 0h1m1 0h1m1 0h3m1 0h1m1 0h2m3 0h1m1 0h1m2 0h1m2 0h1m-30 1h2m3 0h2m1 0h2m1 0h2m4 0h1m2 0h1m1 0h1m2 0h1m1 0h2m-30 1h1m4 0h1m1 0h3m6 0h2m1 0h2m1 0h1m2 0h1m2 0h1m2 0h2m-30 1h1m2 0h1m1 0h2m4 0h3m4 0h2m3 0h1m3 0h2m-31 1h1m5 0h1m3 0h4m2 0h1m1 0h2m1 0h1m1 0h1m1 0h1m1 0h1m3 0h1m-32 1h1m1 0h1m1 0h2m2 0h1m2 0h3m4 0h2m1 0h1m4 0h3m1 0h1m-32 1h2m2 0h2m1 0h2m2 0h1m2 0h2m2 0h1m5 0h2m1 0h1m-26 1h2m1 0h2m1 0h1m3 0h2m2 0h2m1 0h2m4 0h1m3 0h2m1 0h1m-31 1h2m1 0h1m2 0h1m1 0h1m2 0h1m2 0h1m1 0h3m1 0h1m2 0h1m2 0h2m-30 1h3m3 0h1m6 0h2m1 0h1m1 0h2m1 0h2m1 0h2m1 0h1m2 0h1m-31 1h1m1 0h1m1 0h1m2 0h3m1 0h1m2 0h1m2 0h2m1 0h1m2 0h1m1 0h1m2 0h2m2 0h1m-33 1h1m1 0h3m1 0h1m1 0h1m2 0h2m3 0h1m2 0h2m2 0h1m1 0h1m2 0h1m2 0h2m-33 1h1m1 0h4m1 0h1m3 0h1m1 0h4m4 0h1m3 0h1m1 0h2m1 0h1m-29 1h1m2 0h2m2 0h2m1 0h2m1 0h1m1 0h1m5 0h1m2 0h1m5 0h1m-32 1h1m5 0h1m1 0h3m3 0h1m3 0h1m2 0h1m1 0h1m4 0h4m-33 1h1m1 0h1m1 0h3m1 0h2m1 0h1m9 0h1m2 0h5m1 0h2m-24 1h1m3 0h3m1 0h1m1 0h1m1 0h1m2 0h2m3 0h2m1 0h1m-32 1h7m1 0h1m1 0h2m3 0h5m4 0h1m1 0h1m1 0h1m-29 1h1m5 0h1m1 0h2m2 0h4m1 0h2m2 0h1m1 0h2m3 0h3m1 0h1m-33 1h1m1 0h3m1 0h1m2 0h2m2 0h1m2 0h3m1 0h1m1 0h8m1 0h2m-33 1h1m1 0h3m1 0h1m1 0h1m7 0h2m4 0h1m2 0h2m1 0h5m-33 1h1m1 0h3m1 0h1m1 0h2m2 0h2m1 0h2m4 0h1m1 0h1m3 0h1m-28 1h1m5 0h1m3 0h2m1 0h1m3 0h1m2 0h1m2 0h1m2 0h1m2 0h1m-30 1h7m1 0h1m3 0h2m2 0h1m2 0h1m2 0h3m3 0h4"/></svg></div><span class="pp-k">สแกนจ่ายพร้อมเพย์ หรือโอนเข้า</span><span class="pp-v" id="pp-id">{{PROMPTPAY_ID}}</span><span class="pp-n">{{PROMPTPAY_NAME}}</span><span class="pp-k" style="margin-top:6px">ทรูมันนี่</span><span class="pp-v">{{TRUEMONEY_ID}}</span><button class="tab" id="pp-copy" type="button">คัดลอกเลข</button></div>
+      <div><h3>โดเนทสนับสนุน</h3><p>โดเนทผ่านพร้อมเพย์ด้วยความสมัครใจ จำนวนเท่าไรก็ได้ แล้วส่งสลิปด้วย <code>/pay</code> ในเซิร์ฟเวอร์ของคุณ หรือส่งให้แอดมิน เพื่อขอสิทธิ์ผู้สนับสนุน แจ้งผลทาง DM</p><p style="font-size:14px;color:var(--muted)">โดเนทเป็นการสนับสนุนค่าเซิร์ฟเวอร์ ไม่ใช่การซื้อบริการ และไม่มีการคืนเงิน · โอนทางทรูมันนี่ได้ ส่งสลิปให้แอดมิน</p></div>
+      <div class="pp"><div class="pp-qr"><svg shape-rendering="crispEdges" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 37 37" width="168" height="168" role="img" aria-label="QR พร้อมเพย์ Solarlit" class="segno"><path fill="#fff" d="M0 0h37v37h-37z"/><path class="qrline" stroke="#0b111c" d="M2 2.5h7m1 0h3m3 0h2m2 0h1m2 0h1m1 0h1m2 0h7m-33 1h1m5 0h1m1 0h2m2 0h1m1 0h1m2 0h1m2 0h1m2 0h1m2 0h1m5 0h1m-33 1h1m1 0h3m1 0h1m3 0h5m1 0h1m2 0h1m2 0h1m3 0h1m1 0h3m1 0h1m-33 1h1m1 0h3m1 0h1m1 0h1m1 0h1m1 0h1m2 0h1m2 0h2m4 0h1m1 0h1m1 0h3m1 0h1m-33 1h1m1 0h3m1 0h1m4 0h2m3 0h2m2 0h1m2 0h1m2 0h1m1 0h3m1 0h1m-33 1h1m5 0h1m4 0h2m1 0h3m3 0h2m1 0h1m2 0h1m5 0h1m-33 1h7m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h7m-25 1h3m2 0h1m1 0h2m2 0h2m2 0h2m-25 1h1m1 0h2m1 0h3m2 0h3m2 0h2m2 0h1m1 0h1m4 0h1m2 0h1m1 0h2m-32 1h2m4 0h1m1 0h1m1 0h3m1 0h1m1 0h2m3 0h1m1 0h1m2 0h1m2 0h1m-30 1h2m3 0h2m1 0h2m1 0h2m4 0h1m2 0h1m1 0h1m2 0h1m1 0h2m-30 1h1m4 0h1m1 0h3m6 0h2m1 0h2m1 0h1m2 0h1m2 0h1m2 0h2m-30 1h1m2 0h1m1 0h2m4 0h3m4 0h2m3 0h1m3 0h2m-31 1h1m5 0h1m3 0h4m2 0h1m1 0h2m1 0h1m1 0h1m1 0h1m1 0h1m3 0h1m-32 1h1m1 0h1m1 0h2m2 0h1m2 0h3m4 0h2m1 0h1m4 0h3m1 0h1m-32 1h2m2 0h2m1 0h2m2 0h1m2 0h2m2 0h1m5 0h2m1 0h1m-26 1h2m1 0h2m1 0h1m3 0h2m2 0h2m1 0h2m4 0h1m3 0h2m1 0h1m-31 1h2m1 0h1m2 0h1m1 0h1m2 0h1m2 0h1m1 0h3m1 0h1m2 0h1m2 0h2m-30 1h3m3 0h1m6 0h2m1 0h1m1 0h2m1 0h2m1 0h2m1 0h1m2 0h1m-31 1h1m1 0h1m1 0h1m2 0h3m1 0h1m2 0h1m2 0h2m1 0h1m2 0h1m1 0h1m2 0h2m2 0h1m-33 1h1m1 0h3m1 0h1m1 0h1m2 0h2m3 0h1m2 0h2m2 0h1m1 0h1m2 0h1m2 0h2m-33 1h1m1 0h4m1 0h1m3 0h1m1 0h4m4 0h1m3 0h1m1 0h2m1 0h1m-29 1h1m2 0h2m2 0h2m1 0h2m1 0h1m1 0h1m5 0h1m2 0h1m5 0h1m-32 1h1m5 0h1m1 0h3m3 0h1m3 0h1m2 0h1m1 0h1m4 0h4m-33 1h1m1 0h1m1 0h3m1 0h2m1 0h1m9 0h1m2 0h5m1 0h2m-24 1h1m3 0h3m1 0h1m1 0h1m1 0h1m2 0h2m3 0h2m1 0h1m-32 1h7m1 0h1m1 0h2m3 0h5m4 0h1m1 0h1m1 0h1m-29 1h1m5 0h1m1 0h2m2 0h4m1 0h2m2 0h1m1 0h2m3 0h3m1 0h1m-33 1h1m1 0h3m1 0h1m2 0h2m2 0h1m2 0h3m1 0h1m1 0h8m1 0h2m-33 1h1m1 0h3m1 0h1m1 0h1m7 0h2m4 0h1m2 0h2m1 0h5m-33 1h1m1 0h3m1 0h1m1 0h2m2 0h2m1 0h2m4 0h1m1 0h1m3 0h1m-28 1h1m5 0h1m3 0h2m1 0h1m3 0h1m2 0h1m2 0h1m2 0h1m2 0h1m-30 1h7m1 0h1m3 0h2m2 0h1m2 0h1m2 0h3m3 0h4"/></svg></div><span class="pp-k">สแกนโดเนทพร้อมเพย์ หรือโอนเข้า</span><span class="pp-v" id="pp-id">{{PROMPTPAY_ID}}</span><span class="pp-n">{{PROMPTPAY_NAME}}</span><span class="pp-k" style="margin-top:6px">ทรูมันนี่</span><span class="pp-v">{{TRUEMONEY_ID}}</span><button class="tab" id="pp-copy" type="button">คัดลอกเลข</button></div>
     </div>
   </section>
 
@@ -246,7 +245,7 @@ footer{border-top:1px solid var(--line);padding-top:24px;color:var(--muted);font
     <div class="invites">
       <div class="inv">
         <h3>บอทหลัก</h3>
-        <p>ใจปูกับยามใช้ได้ทุกแพ็กเกจ</p>
+        <p>ใจปูกับยามใช้ได้ฟรีครบทุกฟีเจอร์</p>
         <div class="chips">
           <a class="chip" href="https://discord.com/api/oauth2/authorize?client_id=1531424873518334163&amp;permissions=1099780451414&amp;scope=bot%20applications.commands">เชิญใจปู</a>
           <a class="chip" href="https://discord.com/api/oauth2/authorize?client_id=1534824847882850424&amp;permissions=268553216&amp;scope=bot%20applications.commands">เชิญยาม</a>
@@ -254,7 +253,7 @@ footer{border-top:1px solid var(--line);padding-top:24px;color:var(--muted);font
       </div>
       <div class="inv">
         <h3>Voice Relay</h3>
-        <p>เชิญทุกตัวเข้าเซิร์ฟเวอร์เดียวกัน ตามจำนวนในแพ็กเกจ</p>
+        <p>เชิญทุกตัวเข้าเซิร์ฟเวอร์เดียวกัน ฟรี 1 + 5 ตัว ผู้สนับสนุนเชิญเพิ่มได้ถึง 2 + 16</p>
         <div class="chips" id="relay-chips"></div>
       </div>
     </div>
@@ -262,12 +261,12 @@ footer{border-top:1px solid var(--line);padding-top:24px;color:var(--muted);font
 
   <section id="contact">
     <div class="contact">
-      <div><h2>ติดต่อแอดมิน</h2><p style="margin:4px 0 0;color:var(--muted)">ส่งสลิป ขอเปิดบอทเพิ่ม หรือแจ้งปัญหา ได้ที่เซิร์ฟเวอร์ซัพพอร์ต</p></div>
+      <div><h2>ติดต่อแอดมิน</h2><p style="margin:4px 0 0;color:var(--muted)">แจ้งโดเนท ขอสิทธิ์ผู้สนับสนุน หรือแจ้งปัญหา ได้ที่เซิร์ฟเวอร์ซัพพอร์ต</p></div>
       <a class="btn primary" href="{{SUPPORT_URL}}" rel="noopener">เข้าเซิร์ฟเวอร์ซัพพอร์ต</a>
     </div>
   </section>
 
-  <footer><span>Solarlit © 2026</span><span class="flinks"><a href="docs.html">วิธีใช้งาน</a><a href="terms.html">ข้อกำหนดการใช้งาน</a><a href="privacy.html">นโยบายความเป็นส่วนตัว</a></span></footer>
+  <footer><span>Solarlit © 2026 · บอทนี้จัดทำเพื่อการศึกษาและทดลองเรียนรู้ ไม่ใช่บริการเชิงพาณิชย์</span><span class="flinks"><a href="docs.html">วิธีใช้งาน</a><a href="terms.html">ข้อกำหนดการใช้งาน</a><a href="privacy.html">นโยบายความเป็นส่วนตัว</a></span></footer>
 </div>
 
 <script>
@@ -291,10 +290,6 @@ function render(){
 }
 document.querySelectorAll('.tab').forEach(b=>b.addEventListener('click',()=>{unit=b.dataset.unit;document.querySelectorAll('.tab').forEach(x=>x.setAttribute('aria-pressed',x===b));render();}));
 q.addEventListener('input',render);
-function calc(){const h=+document.getElementById('n-head').value,k=+document.getElementById('n-spk').value;
-document.getElementById('v-head').textContent=h;document.getElementById('v-spk').textContent=k;document.getElementById('v-rooms').textContent=k;
-document.getElementById('v-total').textContent=h+k;document.getElementById('v-price').textContent=(h+k)*10;}
-['n-head','n-spk'].forEach(id=>document.getElementById(id).addEventListener('input',calc));calc();
 document.getElementById('pp-copy').addEventListener('click',()=>{const v=document.getElementById('pp-id').textContent.trim(),b=document.getElementById('pp-copy');
   const done=()=>{b.textContent='คัดลอกแล้ว';setTimeout(()=>b.textContent='คัดลอกเลข',1600)};
   try{navigator.clipboard.writeText(v).then(done,()=>{getSelection().selectAllChildren(document.getElementById('pp-id'))})}catch(e){getSelection().selectAllChildren(document.getElementById('pp-id'))}});
