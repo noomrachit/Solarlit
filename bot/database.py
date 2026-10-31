@@ -230,3 +230,17 @@ async def init_db():
             ALTER TABLE settings ADD COLUMN IF NOT EXISTS spam_timeout_min INTEGER DEFAULT 10;
             """
         )
+
+        # Migration: Anti-nuke (กันคนที่มีสิทธิ์มาลบ channel/role หรือแบนคนจำนวนมาก)
+        await conn.execute(
+            """
+            ALTER TABLE settings ADD COLUMN IF NOT EXISTS antinuke_enabled BOOLEAN DEFAULT FALSE;
+            ALTER TABLE settings ADD COLUMN IF NOT EXISTS antinuke_limit INTEGER DEFAULT 3;
+            ALTER TABLE settings ADD COLUMN IF NOT EXISTS antinuke_window_sec INTEGER DEFAULT 30;
+            CREATE TABLE IF NOT EXISTS antinuke_whitelist (
+                guild_id BIGINT NOT NULL,
+                user_id BIGINT NOT NULL,
+                PRIMARY KEY (guild_id, user_id)
+            );
+            """
+        )
