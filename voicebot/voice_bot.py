@@ -495,6 +495,74 @@ async def voice_stats(interaction: discord.Interaction, channel: TrackableChanne
         await interaction.followup.send(embed=embed)
 
 
+@voice_group.command(name="category-stats", description="สรุปเวลารวมของแต่ละคนทั้งหมวด (รวมทุกห้องย่อยที่ติดตามอยู่)")
+@app_commands.describe(category="หมวดห้องเสียง (เช่น FLASH, SUN)", days="ย้อนหลังกี่วัน (ค่าเริ่มต้น 7 วัน, ใส่ 0 = ทั้งหมด)")
+async def voice_category_stats(interaction: discord.Interaction, category: discord.CategoryChannel, days: app_commands.Range[int, 0, 365] = 7):
+    await interaction.response.defer()
+    pool = await db.get_pool()
+
+    cat_channel_ids = {c.id for c in category.channels if isinstance(c, (discord.VoiceChannel, discord.StageChannel))}
+    tracked_rows = await pool.fetch("SELECT channel_id FROM tracked_channels WHERE guild_id = $1", interaction.guild.id)
+    tracked_ids = {r["channel_id"] for r in tracked_rows}
+    channel_ids = list(cat_channel_ids & tracked_ids)
+
+    if not channel_ids:
+        return await interaction.followup.send(f"หมวด {category.name} ไม่มีห้องที่ถูกติดตามอยู่เลย (ใช้ `/track add` กับห้องในหมวดนี้ก่อน)")
+
+    if days > 0:
+        query = """
+            SELECT user_id,
+                   SUM(COALESCE(duration_seconds, EXTRACT(EPOCH FROM (NOW() - joined_at))::INT)) AS total_seconds,
+                   COUNT(*) AS session_count
+            FROM voice_sessions
+            WHERE guild_id = $1 AND channel_id = ANY($2::bigint[]) AND joined_at >= NOW() - ($3 || ' days')::interval
+            GROUP BY user_id
+            ORDER BY total_seconds DESC
+            LIMIT 200
+        """
+        rows = await pool.fetch(query, interaction.guild.id, channel_ids, str(days))
+    else:
+        query = """
+            SELECT user_id,
+                   SUM(COALESCE(duration_seconds, EXTRACT(EPOCH FROM (NOW() - joined_at))::INT)) AS total_seconds,
+                   COUNT(*) AS session_count
+            FROM voice_sessions
+            WHERE guild_id = $1 AND channel_id = ANY($2::bigint[])
+            GROUP BY user_id
+            ORDER BY total_seconds DESC
+            LIMIT 200
+        """
+        rows = await pool.fetch(query, interaction.guild.id, channel_ids)
+
+    if not rows:
+        return await interaction.followup.send(f"ยังไม่มีข้อมูลของหมวด {category.name}")
+
+    lines = []
+    for i, r in enumerate(rows, 1):
+        mins = int(r["total_seconds"] or 0) // 60
+        member = interaction.guild.get_member(r["user_id"])
+        name = member.display_name if member else f"Unknown ({r['user_id']})"
+        lines.append(f"`{i}.` {name} — **{mins} นาที** ({r['session_count']} ครั้ง)")
+
+    period_text = f"{days} วันล่าสุด" if days > 0 else "ทั้งหมดตั้งแต่เริ่มติดตาม"
+
+    PAGE_SIZE = 40
+    pages = [lines[i:i + PAGE_SIZE] for i in range(0, len(lines), PAGE_SIZE)]
+
+    for page_num, page_lines in enumerate(pages, 1):
+        title = f"📊 สถิติหมวด {category.name}"
+        if len(pages) > 1:
+            title += f" (หน้า {page_num}/{len(pages)})"
+        embed = discord.Embed(
+            title=title,
+            description="\n".join(page_lines),
+            color=0x5865F2,
+            timestamp=datetime.now(timezone.utc)
+        )
+        embed.set_footer(text=f"ช่วงเวลา: {period_text} · รวม {len(channel_ids)} ห้อง")
+        await interaction.followup.send(embed=embed)
+
+
 @voice_group.command(name="export", description="ส่งออกข้อมูลการเข้าห้องเป็นไฟล์ CSV (เปิดด้วย Excel ได้)")
 @app_commands.describe(channel="ห้องเสียง", days="ย้อนหลังกี่วัน (ค่าเริ่มต้น 30 วัน, ใส่ 0 = ทั้งหมด)")
 async def voice_export(interaction: discord.Interaction, channel: TrackableChannel, days: app_commands.Range[int, 0, 365] = 30):
@@ -2910,6 +2978,7 @@ async def help_cmd(interaction: discord.Interaction):
     embed.add_field(name="/track list", value="ดูรายการห้องที่ติดตามอยู่", inline=False)
     embed.add_field(name="/voice now", value="ดูว่าใครอยู่ในห้องตอนนี้ + เวลาที่อยู่มา", inline=False)
     embed.add_field(name="/voice stats", value="สรุปเวลารวมของแต่ละคนในห้อง (เลือกช่วงวันได้)", inline=False)
+    embed.add_field(name="/voice category-stats", value="สรุปเวลารวมของแต่ละคนทั้งหมวด (รวมทุกห้องย่อย)", inline=False)
     embed.add_field(name="/voice export", value="ส่งออกข้อมูลเป็นไฟล์ CSV (เปิดด้วย Excel ได้)", inline=False)
     embed.add_field(name="/voice graph", value="ดูกราฟกิจกรรม (เวลารวมต่อวัน) แบบรูปภาพ", inline=False)
     embed.add_field(name="/me", value="ดูการ์ดสถิติเสียงของตัวเอง (30 วันล่าสุด)", inline=False)
