@@ -244,3 +244,12 @@ async def init_db():
             );
             """
         )
+
+        # Migration: Anti-raid ส่วนเสริม — ตรวจสมาชิกใหม่ที่เพิ่งเปลี่ยนชื่อ/avatar ถี่ผิดปกติก่อนเข้าเซิร์ฟเวอร์
+        await conn.execute(
+            """
+            ALTER TABLE settings ADD COLUMN IF NOT EXISTS antiraid_identity_check BOOLEAN DEFAULT FALSE;
+            ALTER TABLE settings ADD COLUMN IF NOT EXISTS antiraid_identity_limit INTEGER DEFAULT 2;
+            ALTER TABLE settings ADD COLUMN IF NOT EXISTS antiraid_identity_window_sec INTEGER DEFAULT 300;
+            """
+        )

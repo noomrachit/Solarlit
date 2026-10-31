@@ -40,6 +40,10 @@ _recent_joins: dict[int, list[datetime]] = {}
 # Anti-spam: (guild_id, user_id) -> [(เวลา, message, เนื้อหา)]
 _recent_msgs: dict[tuple[int, int], list[tuple[datetime, discord.Message, str]]] = {}
 
+# Anti-raid (identity check): user_id -> เวลาที่เปลี่ยนชื่อ/avatar ล่าสุดแต่ละครั้ง (global, ไม่แยกกิลด์
+# เพราะ discord.py ยิง on_user_update ระดับ user ไม่ใช่ระดับกิลด์)
+_recent_identity_changes: dict[int, list[datetime]] = {}
+
 async def check_spam(message: discord.Message, settings: dict) -> bool:
     """ตรวจจับคนยิงข้อความรัว/ข้อความซ้ำ/ยิงหลายห้อง คืน True ถ้าจัดการแล้ว"""
     member = message.author
@@ -275,6 +279,23 @@ async def _handle_antiraid(member: discord.Member, settings: dict) -> bool:
             ))
             return True
 
+    # ตรวจสมาชิกที่เพิ่งเปลี่ยนชื่อ/avatar ถี่ผิดปกติก่อนเข้าเซิร์ฟเวอร์ (มักเป็นบอทที่สุ่มสร้างตัวตนใหม่ก่อนเข้ามา raid)
+    if settings.get("antiraid_identity_check"):
+        id_limit = settings.get("antiraid_identity_limit") or 2
+        id_window = settings.get("antiraid_identity_window_sec") or 300
+        now_id = datetime.now(timezone.utc)
+        id_cutoff = now_id - timedelta(seconds=id_window)
+        changes = [t for t in _recent_identity_changes.get(member.id, []) if t > id_cutoff]
+        if len(changes) >= id_limit:
+            await _antiraid_punish(member, action, f"Anti-raid: เปลี่ยนชื่อ/avatar {len(changes)} ครั้งใน {id_window} วินาทีก่อนเข้าเซิร์ฟเวอร์")
+            await send_log(guild, discord.Embed(
+                title="🛡️ Anti-raid: เปลี่ยนชื่อ/avatar ถี่ผิดปกติ",
+                description=(f"{member.mention} (`{member.id}`) ถูก{_action_th(action)}\n"
+                              f"เปลี่ยนชื่อ/avatar {len(changes)} ครั้ง ภายใน {id_window} วินาที ก่อนเข้าเซิร์ฟเวอร์"),
+                color=0xFF9F1C, timestamp=now_id
+            ))
+            return True
+
     # ตรวจ join-burst: มีคนเข้าพร้อมกันจำนวนมากในช่วงเวลาสั้นๆ หรือไม่
     threshold = settings.get("antiraid_join_threshold") or 5
     window = settings.get("antiraid_join_window_seconds") or 10
@@ -354,6 +375,20 @@ async def on_member_remove(member: discord.Member):
         await channel.send(leave_msg)
     except Exception:
         pass
+
+@bot.event
+async def on_user_update(before: discord.User, after: discord.User):
+    """ดักทุกครั้งที่ username หรือ avatar ของใครก็ตามเปลี่ยน (ระดับ Discord user ไม่ใช่ระดับกิลด์)
+    เก็บเวลาไว้ให้ _handle_antiraid เช็คตอนเข้าเซิร์ฟเวอร์ใหม่ว่าเปลี่ยนถี่ผิดปกติหรือไม่"""
+    if before.name == after.name and before.avatar == after.avatar:
+        return
+    now = datetime.now(timezone.utc)
+    history = _recent_identity_changes.setdefault(after.id, [])
+    history.append(now)
+    # กันแรมบวมสะสม: ตัดทิ้งเกิน 1 ชม. ไว้พอ (เกณฑ์การตรวจจริงใช้ antiraid_identity_window_sec ที่สั้นกว่านี้มาก)
+    cutoff = now - timedelta(hours=1)
+    history[:] = [t for t in history if t > cutoff]
+
 
 @bot.event
 async def on_message(message: discord.Message):
@@ -763,6 +798,19 @@ async def antiraid_minage(interaction: discord.Interaction, hours: app_commands.
     """, interaction.guild.id, hours)
     await interaction.response.send_message(f"ตั้งอายุบัญชีขั้นต่ำเป็น {hours} ชม. แล้ว", ephemeral=True)
 
+@antiraid_group.command(name="identity", description="เปิด/ปิดการตรวจสมาชิกที่เพิ่งเปลี่ยนชื่อ/avatar ถี่ผิดปกติก่อนเข้าเซิร์ฟเวอร์")
+@has_mod_perms()
+@app_commands.describe(enabled="เปิดหรือปิด", count="เปลี่ยนกี่ครั้งถึงถือว่าผิดปกติ", seconds="ภายในกี่วินาทีก่อนเข้าเซิร์ฟเวอร์")
+async def antiraid_identity(interaction: discord.Interaction, enabled: bool, count: app_commands.Range[int, 1, 20] = 2, seconds: app_commands.Range[int, 10, 3600] = 300):
+    pool = await db.get_pool()
+    await pool.execute("""
+        INSERT INTO settings (guild_id, antiraid_identity_check, antiraid_identity_limit, antiraid_identity_window_sec)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (guild_id) DO UPDATE SET antiraid_identity_check = $2, antiraid_identity_limit = $3, antiraid_identity_window_sec = $4
+    """, interaction.guild.id, enabled, count, seconds)
+    status = "เปิด" if enabled else "ปิด"
+    await interaction.response.send_message(f"การตรวจเปลี่ยนชื่อ/avatar ถี่ผิดปกติ {status} แล้ว (เกณฑ์ {count} ครั้ง / {seconds} วินาที)", ephemeral=True)
+
 @antiraid_group.command(name="action", description="ตั้งการกระทำต่อสมาชิกที่ถูกจับว่าเป็น raid")
 @has_mod_perms()
 @app_commands.choices(action=[
@@ -788,6 +836,12 @@ async def antiraid_status(interaction: discord.Interaction):
     embed.add_field(name="การกระทำ", value=_action_th(settings.get("antiraid_action") or "kick"), inline=True)
     embed.add_field(name="เกณฑ์ raid", value=f"{settings.get('antiraid_join_threshold') or 5} คน / {settings.get('antiraid_join_window_seconds') or 10} วินาที", inline=True)
     embed.add_field(name="อายุบัญชีขั้นต่ำ", value=f"{settings.get('antiraid_min_account_age_hours') or 0} ชม.", inline=True)
+    id_status = "✅ เปิด" if settings.get("antiraid_identity_check") else "❌ ปิด"
+    embed.add_field(
+        name="ตรวจเปลี่ยนชื่อ/avatar ถี่",
+        value=f"{id_status} ({settings.get('antiraid_identity_limit') or 2} ครั้ง / {settings.get('antiraid_identity_window_sec') or 300} วินาที)",
+        inline=True,
+    )
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @antiraid_group.command(name="lockdown", description="ปิดรับสมาชิกใหม่ทันที (บล็อกทุกคนที่เข้ามาจนกว่าจะ unlock)")
