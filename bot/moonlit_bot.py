@@ -878,12 +878,7 @@ async def on_audit_log_entry_create(entry: discord.AuditLogEntry):
 
 security_group = app_commands.Group(name="security", description="ตรวจสอบและป้องกันความปลอดภัยของเซิร์ฟเวอร์")
 
-@security_group.command(name="audit", description="ตรวจสุขภาพความปลอดภัยของเซิร์ฟเวอร์ (อ่านอย่างเดียว)")
-@has_mod_perms()
-async def security_audit(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
-    guild = interaction.guild
-    settings = await get_settings(guild.id)
+async def build_audit_embed(guild: discord.Guild, settings: dict) -> discord.Embed:
     high, mid, ok = [], [], []
 
     if guild.verification_level < discord.VerificationLevel.medium:
@@ -926,7 +921,14 @@ async def security_audit(interaction: discord.Interaction):
         embed.add_field(name="🟠 ควรตรวจสอบ", value="\n".join(mid)[:1024], inline=False)
     if ok:
         embed.add_field(name="🟢 ปกติ", value="\n".join(ok)[:1024], inline=False)
-    await interaction.followup.send(embed=embed, ephemeral=True)
+    return embed
+
+@security_group.command(name="audit", description="ตรวจสุขภาพความปลอดภัยของเซิร์ฟเวอร์ (อ่านอย่างเดียว)")
+@has_mod_perms()
+async def security_audit(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    settings = await get_settings(interaction.guild.id)
+    await interaction.followup.send(embed=await build_audit_embed(interaction.guild, settings), ephemeral=True)
 
 @security_group.command(name="antinuke", description="เปิด/ปิด Anti-nuke (ถอดสิทธิ์คนที่ลบช่อง/role หรือแบนคนจำนวนมาก)")
 @has_mod_perms()
@@ -965,6 +967,119 @@ async def security_whitelist(interaction: discord.Interaction, user: discord.Mem
         await pool.execute("INSERT INTO antinuke_whitelist (guild_id, user_id) VALUES ($1,$2) ON CONFLICT DO NOTHING", interaction.guild.id, user.id)
         msg = f"เพิ่ม {user.mention} เข้า whitelist แล้ว"
     await interaction.response.send_message(msg, ephemeral=True)
+
+# ป๊อบอัพแผงควบคุมความปลอดภัย: เลือกหมวดจาก dropdown + ปุ่มเปิด/ปิด
+PANEL_CATEGORIES = {
+    "overview": ("📋 ภาพรวม", None),
+    "spam": ("💬 Anti-spam (ยิงข้อความรัว)", "anti_spam"),
+    "raid": ("🚪 Anti-raid (คนเข้าพร้อมกัน)", "antiraid_enabled"),
+    "nuke": ("💣 Anti-nuke (กันพังเซิร์ฟเวอร์)", "antinuke_enabled"),
+    "automod": ("🧹 Automod (คำต้องห้าม/invite/mention)", "automod_enabled"),
+    "audit": ("🔍 ตรวจสุขภาพเซิร์ฟเวอร์", None),
+}
+_ACTION_TH = {"delete": "ลบข้อความอย่างเดียว", "timeout": "ลบ + timeout", "kick": "ลบ + เตะออก"}
+
+def _onoff(v) -> str:
+    return "🟢 เปิด" if v else "🔴 ปิด"
+
+class SecurityPanel(discord.ui.View):
+    def __init__(self, guild: discord.Guild, user_id: int):
+        super().__init__(timeout=300)
+        self.guild = guild
+        self.user_id = user_id
+        self.category = "overview"
+        select = discord.ui.Select(
+            placeholder="เลือกหมวดการป้องกัน...",
+            options=[discord.SelectOption(label=label, value=key, default=(key == "overview"))
+                     for key, (label, _col) in PANEL_CATEGORIES.items()],
+        )
+        select.callback = self.on_select
+        self.select = select
+        self.add_item(select)
+        self.toggle_btn = discord.ui.Button(label="เปิด/ปิด", style=discord.ButtonStyle.primary)
+        self.toggle_btn.callback = self.on_toggle
+        self.add_item(self.toggle_btn)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("แผงนี้เป็นของคนที่เรียกใช้เท่านั้น", ephemeral=True)
+            return False
+        return True
+
+    async def build(self) -> discord.Embed:
+        s = await get_settings(self.guild.id)
+        label, col = PANEL_CATEGORIES[self.category]
+        if self.category == "audit":
+            return await build_audit_embed(self.guild, s)
+        embed = discord.Embed(title=f"🛡️ {label}", color=0x5865F2)
+        if self.category == "overview":
+            for key, (lbl, c) in PANEL_CATEGORIES.items():
+                if c:
+                    embed.add_field(name=lbl, value=_onoff(s.get(c)), inline=False)
+            embed.set_footer(text="เลือกหมวดจากเมนูด้านล่างเพื่อดูรายละเอียดและเปิด/ปิด")
+        elif self.category == "spam":
+            embed.description = (
+                f"สถานะ: {_onoff(s.get('anti_spam'))}\n"
+                f"เกณฑ์: {s.get('spam_msg_limit') or 5} ข้อความ / {s.get('spam_window_sec') or 5} วินาที\n"
+                f"เมื่อจับได้: {_ACTION_TH.get(s.get('spam_action') or 'timeout')}"
+                f" ({s.get('spam_timeout_min') or 10} นาที)\n"
+                "ปรับค่าด้วย `/automod anti_spam`\n⚠️ ต้องเปิด Automod ด้วยจึงทำงาน")
+        elif self.category == "raid":
+            embed.description = (
+                f"สถานะ: {_onoff(s.get('antiraid_enabled'))}\n"
+                f"เกณฑ์: {s.get('antiraid_join_threshold') or 5} คน / {s.get('antiraid_join_window_seconds') or 10} วินาที\n"
+                f"อายุบัญชีขั้นต่ำ: {s.get('antiraid_min_account_age_hours') or 24} ชม.\n"
+                f"Lockdown: {_onoff(s.get('antiraid_lockdown'))}\n"
+                "ปรับค่าด้วย `/antiraid ...`")
+        elif self.category == "nuke":
+            embed.description = (
+                f"สถานะ: {_onoff(s.get('antinuke_enabled'))}\n"
+                f"เกณฑ์: {s.get('antinuke_limit') or 3} ครั้ง / {s.get('antinuke_window_sec') or 30} วินาที\n"
+                "ตรวจ: ลบช่อง/role, แบน/เตะ, สร้าง webhook → ถอด role อันตราย\n"
+                "ปรับค่าด้วย `/security antinuke`, จัดการ whitelist ด้วย `/security whitelist`")
+        elif self.category == "automod":
+            embed.description = (
+                f"สถานะ: {_onoff(s.get('automod_enabled'))}\n"
+                f"ห้าม invite: {_onoff(s.get('anti_invite'))}\n"
+                f"Anti-mention: {_onoff(s.get('anti_mention_spam'))} (limit {s.get('mention_limit') or 5})\n"
+                "ปรับค่าด้วย `/automod ...`")
+        return embed
+
+    async def refresh(self, interaction: discord.Interaction):
+        _label, col = PANEL_CATEGORIES[self.category]
+        self.toggle_btn.disabled = col is None
+        if col:
+            on = bool((await get_settings(self.guild.id)).get(col))
+            self.toggle_btn.label = "ปิดระบบนี้" if on else "เปิดระบบนี้"
+            self.toggle_btn.style = discord.ButtonStyle.danger if on else discord.ButtonStyle.success
+        else:
+            self.toggle_btn.label = "เปิด/ปิด"
+            self.toggle_btn.style = discord.ButtonStyle.secondary
+        for opt in self.select.options:
+            opt.default = (opt.value == self.category)
+        await interaction.response.edit_message(embed=await self.build(), view=self)
+
+    async def on_select(self, interaction: discord.Interaction):
+        self.category = self.select.values[0]
+        await self.refresh(interaction)
+
+    async def on_toggle(self, interaction: discord.Interaction):
+        _label, col = PANEL_CATEGORIES[self.category]
+        if col:
+            pool = await db.get_pool()
+            cur = bool((await get_settings(self.guild.id)).get(col))
+            # col มาจากตารางคงที่ด้านบนเท่านั้น (ไม่รับจากผู้ใช้)
+            await pool.execute(
+                f"INSERT INTO settings (guild_id, {col}) VALUES ($1, $2) "
+                f"ON CONFLICT (guild_id) DO UPDATE SET {col} = $2", self.guild.id, not cur)
+        await self.refresh(interaction)
+
+@security_group.command(name="panel", description="เปิดแผงควบคุมความปลอดภัย (เลือกหมวด + เปิด/ปิด)")
+@has_mod_perms()
+async def security_panel(interaction: discord.Interaction):
+    view = SecurityPanel(interaction.guild, interaction.user.id)
+    view.toggle_btn.disabled = True
+    await interaction.response.send_message(embed=await view.build(), view=view, ephemeral=True)
 
 tree.add_command(security_group)
 
@@ -2976,7 +3091,7 @@ async def help_cmd(interaction: discord.Interaction):
     embed.add_field(name="/mod", value="kick • ban • timeout • warn • warnings • clear", inline=False)
     embed.add_field(name="/welcome", value="channel • message • leave", inline=False)
     embed.add_field(name="/automod", value="toggle • anti_invite • anti_mention_spam • anti_spam • addword • removeword • listwords", inline=False)
-    embed.add_field(name="/security", value="audit • antinuke • whitelist", inline=False)
+    embed.add_field(name="/security", value="panel • audit • antinuke • whitelist", inline=False)
     embed.add_field(name="/customcommand", value="add • remove • list • prefix", inline=False)
     embed.add_field(name="/reactionrole", value="add • remove", inline=False)
     embed.add_field(name="/queue", value="join • leave • list • book • unbook • bookings • clear • refresh • board", inline=False)
