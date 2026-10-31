@@ -219,3 +219,14 @@ async def init_db():
             ALTER TABLE settings ADD COLUMN IF NOT EXISTS antiraid_lockdown BOOLEAN DEFAULT FALSE;
             """
         )
+
+        # Migration: ระบบตรวจจับคนยิงสแปมข้อความ (anti-spam / flood)
+        await conn.execute(
+            """
+            ALTER TABLE settings ADD COLUMN IF NOT EXISTS anti_spam BOOLEAN DEFAULT FALSE;
+            ALTER TABLE settings ADD COLUMN IF NOT EXISTS spam_msg_limit INTEGER DEFAULT 5;
+            ALTER TABLE settings ADD COLUMN IF NOT EXISTS spam_window_sec INTEGER DEFAULT 5;
+            ALTER TABLE settings ADD COLUMN IF NOT EXISTS spam_action TEXT DEFAULT 'timeout';
+            ALTER TABLE settings ADD COLUMN IF NOT EXISTS spam_timeout_min INTEGER DEFAULT 10;
+            """
+        )
