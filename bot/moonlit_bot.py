@@ -37,6 +37,75 @@ tree = bot.tree
 # ป้องกัน Anti-raid: เก็บเวลาการเข้าร่วมล่าสุดของแต่ละกิลด์ไว้ในแรม (ไม่ต้องกิน DB ทุก join)
 _recent_joins: dict[int, list[datetime]] = {}
 
+# Anti-spam: (guild_id, user_id) -> [(เวลา, message, เนื้อหา)]
+_recent_msgs: dict[tuple[int, int], list[tuple[datetime, discord.Message, str]]] = {}
+
+async def check_spam(message: discord.Message, settings: dict) -> bool:
+    """ตรวจจับคนยิงข้อความรัว/ข้อความซ้ำ/ยิงหลายห้อง คืน True ถ้าจัดการแล้ว"""
+    member = message.author
+    if not isinstance(member, discord.Member):
+        return False
+    perms = member.guild_permissions
+    if perms.administrator or perms.manage_messages:
+        return False
+    limit = settings.get("spam_msg_limit") or 5
+    window = settings.get("spam_window_sec") or 5
+    now = datetime.now(timezone.utc)
+    key = (message.guild.id, member.id)
+    content = message.content.strip().lower()
+    history = [e for e in _recent_msgs.get(key, []) if (now - e[0]).total_seconds() <= window]
+    history.append((now, message, content))
+    _recent_msgs[key] = history
+
+    reason = None
+    if len(history) >= limit:
+        reason = f"ส่งข้อความรัว {len(history)} ข้อความใน {window} วินาที"
+    elif content:
+        same = [e for e in history if e[2] == content]
+        if len(same) >= 3:
+            reason = "ส่งข้อความซ้ำๆ"
+            if len({e[1].channel.id for e in same}) >= 3:
+                reason = "ส่งข้อความเดียวกันกระจายหลายห้อง"
+    if not reason:
+        return False
+
+    _recent_msgs.pop(key, None)
+    for _, m, _c in history:
+        try:
+            await m.delete()
+        except Exception:
+            pass
+    action = settings.get("spam_action") or "timeout"
+    result = "ลบข้อความ"
+    try:
+        if action == "timeout":
+            minutes = settings.get("spam_timeout_min") or 10
+            await member.timeout(timedelta(minutes=minutes), reason=f"Anti-spam: {reason}")
+            result = f"ลบข้อความ + timeout {minutes} นาที"
+        elif action == "kick":
+            await member.kick(reason=f"Anti-spam: {reason}")
+            result = "ลบข้อความ + เตะออก"
+    except Exception:
+        result += " (สั่งลงโทษไม่สำเร็จ ตรวจสอบสิทธิ์/ลำดับ role ของบอท)"
+    try:
+        pool = await db.get_pool()
+        await pool.execute(
+            "INSERT INTO warnings (guild_id, user_id, reason, moderator_id) VALUES ($1, $2, $3, $4)",
+            message.guild.id, member.id, f"Anti-spam: {reason}", bot.user.id,
+        )
+    except Exception:
+        pass
+    try:
+        await message.channel.send(f"{member.mention} ตรวจพบสแปม: {reason}", delete_after=8)
+    except Exception:
+        pass
+    embed = discord.Embed(title="🚨 ตรวจพบคนยิงสแปม", color=0xED4245, timestamp=now)
+    embed.add_field(name="ผู้ใช้", value=f"{member.mention} ({member.id})", inline=False)
+    embed.add_field(name="สาเหตุ", value=reason, inline=False)
+    embed.add_field(name="การจัดการ", value=result, inline=False)
+    await send_log(message.guild, embed)
+    return True
+
 # Helpers
 async def get_settings(guild_id: int) -> dict:
     pool = await db.get_pool()
@@ -302,6 +371,9 @@ async def on_message(message: discord.Message):
                     await message.channel.send(f"{message.author.mention} ห้ามใช้คำต้องห้าม", delete_after=5)
                 except Exception:
                     pass
+                return
+        if settings.get("anti_spam"):
+            if await check_spam(message, settings):
                 return
         if settings.get("anti_invite"):
             if "discord.gg/" in content_lower or "discord.com/invite/" in content_lower:
@@ -587,6 +659,42 @@ async def automod_anti_mention(interaction: discord.Interaction, limit: app_comm
     """, interaction.guild.id, new_val, limit)
     await interaction.response.send_message(f"Anti-mention-spam {'เปิด' if new_val else 'ปิด'} (limit={limit})", ephemeral=True)
 
+@automod_group.command(name="anti_spam", description="เปิด/ปิด ตรวจจับคนยิงสแปมข้อความ")
+@has_mod_perms()
+@app_commands.describe(
+    limit="จำนวนข้อความที่ถือว่ายิงรัว (default 5)",
+    window="ภายในกี่วินาที (default 5)",
+    action="สิ่งที่ทำเมื่อจับได้",
+    timeout_min="นาทีที่ timeout (ใช้เมื่อ action=timeout)",
+)
+@app_commands.choices(action=[
+    app_commands.Choice(name="ลบข้อความอย่างเดียว", value="delete"),
+    app_commands.Choice(name="ลบ + timeout", value="timeout"),
+    app_commands.Choice(name="ลบ + เตะออก", value="kick"),
+])
+async def automod_anti_spam(
+    interaction: discord.Interaction,
+    limit: app_commands.Range[int, 3, 20] = 5,
+    window: app_commands.Range[int, 2, 30] = 5,
+    action: app_commands.Choice[str] = None,
+    timeout_min: app_commands.Range[int, 1, 10080] = 10,
+):
+    pool = await db.get_pool()
+    settings = await get_settings(interaction.guild.id)
+    new_val = not settings.get("anti_spam", False)
+    act = action.value if action else "timeout"
+    await pool.execute("""
+        INSERT INTO settings (guild_id, anti_spam, spam_msg_limit, spam_window_sec, spam_action, spam_timeout_min)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT (guild_id) DO UPDATE SET anti_spam = $2, spam_msg_limit = $3,
+            spam_window_sec = $4, spam_action = $5, spam_timeout_min = $6
+    """, interaction.guild.id, new_val, limit, window, act, timeout_min)
+    await interaction.response.send_message(
+        f"Anti-spam {'เปิด' if new_val else 'ปิด'} ({limit} ข้อความ/{window} วิ, action={act})"
+        "\nหมายเหตุ: ต้องเปิด `/automod toggle` ด้วย ระบบจึงทำงาน",
+        ephemeral=True,
+    )
+
 @automod_group.command(name="addword", description="เพิ่มคำต้องห้าม")
 @has_mod_perms()
 @app_commands.describe(word="คำที่ต้องการแบน")
@@ -704,6 +812,161 @@ async def antiraid_unlock(interaction: discord.Interaction):
     await interaction.response.send_message("🔓 ยกเลิก lockdown แล้ว", ephemeral=True)
 
 tree.add_command(antiraid_group)
+
+# Security: ตรวจสุขภาพเซิร์ฟเวอร์ + Anti-nuke
+DANGEROUS_PERMS = [
+    "administrator", "manage_guild", "manage_roles", "manage_channels",
+    "manage_webhooks", "ban_members", "kick_members", "mention_everyone",
+]
+NUKE_ACTIONS = {
+    discord.AuditLogAction.channel_delete: "ลบช่อง",
+    discord.AuditLogAction.role_delete: "ลบ role",
+    discord.AuditLogAction.ban: "แบนสมาชิก",
+    discord.AuditLogAction.kick: "เตะสมาชิก",
+    discord.AuditLogAction.webhook_create: "สร้าง webhook",
+}
+_nuke_events: dict[tuple[int, int], list[tuple[datetime, str]]] = {}
+
+def _dangerous(perms: discord.Permissions) -> list[str]:
+    return [p for p in DANGEROUS_PERMS if getattr(perms, p)]
+
+@bot.event
+async def on_audit_log_entry_create(entry: discord.AuditLogEntry):
+    label = NUKE_ACTIONS.get(entry.action)
+    guild = entry.guild
+    actor = entry.user
+    if not label or actor is None or actor.id in (bot.user.id, guild.owner_id):
+        return
+    settings = await get_settings(guild.id)
+    if not settings.get("antinuke_enabled"):
+        return
+    pool = await db.get_pool()
+    if await pool.fetchval("SELECT 1 FROM antinuke_whitelist WHERE guild_id=$1 AND user_id=$2", guild.id, actor.id):
+        return
+    limit = settings.get("antinuke_limit") or 3
+    window = settings.get("antinuke_window_sec") or 30
+    now = datetime.now(timezone.utc)
+    key = (guild.id, actor.id)
+    events = [e for e in _nuke_events.get(key, []) if (now - e[0]).total_seconds() <= window]
+    events.append((now, label))
+    _nuke_events[key] = events
+    if len(events) < limit:
+        return
+    _nuke_events.pop(key, None)
+
+    member = guild.get_member(actor.id)
+    removed, failed = [], []
+    if member:
+        for role in member.roles:
+            if role.is_default() or role.managed:
+                continue
+            if _dangerous(role.permissions):
+                try:
+                    await member.remove_roles(role, reason="Anti-nuke: พฤติกรรมทำลายเซิร์ฟเวอร์")
+                    removed.append(role.name)
+                except Exception:
+                    failed.append(role.name)
+    embed = discord.Embed(title="🛡️ Anti-nuke ทำงาน", color=0xED4245, timestamp=now)
+    embed.add_field(name="ผู้กระทำ", value=f"{actor.mention} ({actor.id})", inline=False)
+    embed.add_field(name="พฤติกรรม", value=", ".join(sorted({e[1] for e in events})) + f" ({len(events)} ครั้งใน {window} วิ)", inline=False)
+    embed.add_field(name="ถอด role แล้ว", value=", ".join(removed) or "-", inline=False)
+    if failed:
+        embed.add_field(name="ถอดไม่สำเร็จ (role บอทต่ำกว่า/ไม่มีสิทธิ์)", value=", ".join(failed), inline=False)
+    if not member:
+        embed.add_field(name="หมายเหตุ", value="ไม่พบสมาชิกในเซิร์ฟเวอร์ (อาจออกไปแล้ว หรือเป็นบอท/แอปที่ถูกถอด)", inline=False)
+    await send_log(guild, embed)
+
+security_group = app_commands.Group(name="security", description="ตรวจสอบและป้องกันความปลอดภัยของเซิร์ฟเวอร์")
+
+@security_group.command(name="audit", description="ตรวจสุขภาพความปลอดภัยของเซิร์ฟเวอร์ (อ่านอย่างเดียว)")
+@has_mod_perms()
+async def security_audit(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    guild = interaction.guild
+    settings = await get_settings(guild.id)
+    high, mid, ok = [], [], []
+
+    if guild.verification_level < discord.VerificationLevel.medium:
+        mid.append(f"Verification level ต่ำ (`{guild.verification_level.name}`) แนะนำ medium ขึ้นไป")
+    else:
+        ok.append(f"Verification level: `{guild.verification_level.name}`")
+    if guild.explicit_content_filter == discord.ContentFilter.disabled:
+        mid.append("Explicit content filter ปิดอยู่")
+    if guild.default_role.permissions.value:
+        bad = _dangerous(guild.default_role.permissions)
+        if bad:
+            high.append(f"@everyone มีสิทธิ์อันตราย: {', '.join(bad)}")
+    admin_roles = [r for r in guild.roles if r.permissions.administrator and not r.is_default() and not r.managed]
+    for r in admin_roles:
+        humans = [m for m in r.members if not m.bot and m.id != guild.owner_id]
+        if humans:
+            mid.append(f"role **{r.name}** มี Administrator ({len(humans)} คน)")
+    for m in guild.members:
+        if m.bot and m.guild_permissions.administrator and m.id != bot.user.id:
+            mid.append(f"บอท {m.mention} มีสิทธิ์ Administrator")
+    me = guild.me
+    perms = me.guild_permissions
+    if not (perms.administrator or perms.view_audit_log):
+        mid.append("บอทไม่มีสิทธิ์ View Audit Log (Anti-nuke จะไม่ทำงาน)")
+    if not (perms.administrator or (perms.moderate_members and perms.kick_members)):
+        mid.append("บอทไม่มีสิทธิ์ Moderate Members/Kick Members (ลงโทษไม่ได้)")
+    if me.top_role.position < max((r.position for r in guild.roles), default=0) - 3:
+        mid.append(f"role ของบอทอยู่ต่ำ (ตำแหน่ง {me.top_role.position}) อาจลงโทษคนที่มี role สูงกว่าไม่ได้")
+    if not settings.get("log_channel"):
+        mid.append("ยังไม่ได้ตั้งห้อง log")
+    for key, name in (("automod_enabled", "Automod"), ("antiraid_enabled", "Anti-raid"),
+                      ("anti_spam", "Anti-spam"), ("antinuke_enabled", "Anti-nuke")):
+        (ok if settings.get(key) else mid).append(f"{name}: {'เปิด' if settings.get(key) else 'ปิดอยู่'}")
+
+    level = "🔴 เสี่ยงสูง" if high else ("🟠 ควรปรับปรุง" if len([x for x in mid if 'ปิด' in x or 'ต่ำ' in x or 'ไม่มี' in x]) else "🟢 ปลอดภัย")
+    embed = discord.Embed(title=f"🔍 ผลตรวจความปลอดภัย — {guild.name}", description=f"ระดับ: **{level}**", color=0x5865F2)
+    if high:
+        embed.add_field(name="🔴 ความเสี่ยงสูง", value="\n".join(high)[:1024], inline=False)
+    if mid:
+        embed.add_field(name="🟠 ควรตรวจสอบ", value="\n".join(mid)[:1024], inline=False)
+    if ok:
+        embed.add_field(name="🟢 ปกติ", value="\n".join(ok)[:1024], inline=False)
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+@security_group.command(name="antinuke", description="เปิด/ปิด Anti-nuke (ถอดสิทธิ์คนที่ลบช่อง/role หรือแบนคนจำนวนมาก)")
+@has_mod_perms()
+@app_commands.describe(limit="จำนวนครั้งที่ถือว่าผิดปกติ (default 3)", window="ภายในกี่วินาที (default 30)")
+async def security_antinuke(
+    interaction: discord.Interaction,
+    limit: app_commands.Range[int, 2, 20] = 3,
+    window: app_commands.Range[int, 5, 300] = 30,
+):
+    pool = await db.get_pool()
+    settings = await get_settings(interaction.guild.id)
+    new_val = not settings.get("antinuke_enabled", False)
+    await pool.execute("""
+        INSERT INTO settings (guild_id, antinuke_enabled, antinuke_limit, antinuke_window_sec)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (guild_id) DO UPDATE SET antinuke_enabled = $2, antinuke_limit = $3, antinuke_window_sec = $4
+    """, interaction.guild.id, new_val, limit, window)
+    await interaction.response.send_message(
+        f"Anti-nuke {'เปิด' if new_val else 'ปิด'} ({limit} ครั้ง/{window} วิ)\n"
+        "บอทต้องมีสิทธิ์ View Audit Log และ Manage Roles และ role บอทต้องอยู่สูงกว่าคนที่จะถูกถอดสิทธิ์",
+        ephemeral=True,
+    )
+
+@security_group.command(name="whitelist", description="เพิ่ม/ลบผู้ใช้ที่ Anti-nuke จะไม่ตรวจ (เจ้าของเซิร์ฟเวอร์ถูกข้ามอยู่แล้ว)")
+@has_mod_perms()
+@app_commands.describe(user="ผู้ใช้", remove="ลบออกจาก whitelist")
+async def security_whitelist(interaction: discord.Interaction, user: discord.Member, remove: bool = False):
+    if interaction.user.id != interaction.guild.owner_id:
+        await interaction.response.send_message("เฉพาะเจ้าของเซิร์ฟเวอร์เท่านั้นที่จัดการ whitelist ได้", ephemeral=True)
+        return
+    pool = await db.get_pool()
+    if remove:
+        await pool.execute("DELETE FROM antinuke_whitelist WHERE guild_id=$1 AND user_id=$2", interaction.guild.id, user.id)
+        msg = f"ลบ {user.mention} ออกจาก whitelist แล้ว"
+    else:
+        await pool.execute("INSERT INTO antinuke_whitelist (guild_id, user_id) VALUES ($1,$2) ON CONFLICT DO NOTHING", interaction.guild.id, user.id)
+        msg = f"เพิ่ม {user.mention} เข้า whitelist แล้ว"
+    await interaction.response.send_message(msg, ephemeral=True)
+
+tree.add_command(security_group)
 
 # Custom Commands
 cc_group = app_commands.Group(name="customcommand", description="จัดการ custom commands")
@@ -2712,7 +2975,8 @@ async def help_cmd(interaction: discord.Interaction):
     embed.add_field(name="/invite", value="รับลิงก์เชิญบอทพร้อม permission ครบ", inline=False)
     embed.add_field(name="/mod", value="kick • ban • timeout • warn • warnings • clear", inline=False)
     embed.add_field(name="/welcome", value="channel • message • leave", inline=False)
-    embed.add_field(name="/automod", value="toggle • anti_invite • anti_mention_spam • addword • removeword • listwords", inline=False)
+    embed.add_field(name="/automod", value="toggle • anti_invite • anti_mention_spam • anti_spam • addword • removeword • listwords", inline=False)
+    embed.add_field(name="/security", value="audit • antinuke • whitelist", inline=False)
     embed.add_field(name="/customcommand", value="add • remove • list • prefix", inline=False)
     embed.add_field(name="/reactionrole", value="add • remove", inline=False)
     embed.add_field(name="/queue", value="join • leave • list • book • unbook • bookings • clear • refresh • board", inline=False)
