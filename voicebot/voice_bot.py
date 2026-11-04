@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 from aiohttp import web
 
 import party_ocr
+import ai_assistant
 
 import matplotlib
 matplotlib.use("Agg")  # ไม่ต้องใช้ GUI backend เพราะรันบนเซิร์ฟเวอร์
@@ -2860,6 +2861,85 @@ tree.add_command(counter_group)
 
 
 # ─────────────────────────────────────────────
+# ผู้ช่วย AI (Claude) — /ถาม, /สรุปห้อง, /แนะนำปาร์ตี้
+# แยกไลบรารี/ไฟล์ต่างหากใน ai_assistant.py ไม่แตะ logic เดิมของบอท
+# ต้องตั้งค่า ANTHROPIC_API_KEY ใน .env ก่อนใช้งาน
+# ─────────────────────────────────────────────
+
+ai_group = app_commands.Group(name="ai", description="ผู้ช่วย AI ของบอทยาม")
+
+
+@ai_group.command(name="ถาม", description="ถามอะไรก็ได้ บอทจะจำบทสนทนาในห้องนี้ไว้ (ล่าสุด 10 คู่ถาม-ตอบ)")
+@app_commands.describe(คำถาม="คำถามของคุณ")
+async def ai_ask(interaction: discord.Interaction, คำถาม: str):
+    await interaction.response.defer()
+    try:
+        answer = await ai_assistant.ask(interaction.channel_id, คำถาม)
+    except RuntimeError as e:
+        return await interaction.followup.send(f"❌ {e}", ephemeral=True)
+    except Exception as e:
+        log.error(f"/ai ถาม ล้มเหลว: {e}")
+        return await interaction.followup.send("❌ เรียก AI ไม่สำเร็จ ลองใหม่อีกครั้ง", ephemeral=True)
+    await interaction.followup.send(answer[:2000])
+
+
+@ai_group.command(name="ลืม", description="ล้างบทสนทนาที่บอทจำไว้ในห้องนี้")
+async def ai_forget(interaction: discord.Interaction):
+    ai_assistant.clear_history(interaction.channel_id)
+    await interaction.response.send_message("🧹 ล้างบทสนทนาที่จำไว้ในห้องนี้แล้ว", ephemeral=True)
+
+
+@ai_group.command(name="สรุปห้อง", description="ให้ AI สรุปข้อความล่าสุดในห้องนี้")
+@app_commands.describe(จำนวน="จำนวนข้อความล่าสุดที่จะดึงมาสรุป (ค่าเริ่มต้น 100, สูงสุด 500)")
+async def ai_summarize(interaction: discord.Interaction, จำนวน: Optional[int] = 100):
+    จำนวน = max(1, min(จำนวน or 100, 500))
+    await interaction.response.defer()
+    messages = []
+    async for m in interaction.channel.history(limit=จำนวน):
+        if m.author.bot or not m.content:
+            continue
+        messages.append(f"{m.author.display_name}: {m.content}")
+    messages.reverse()  # เรียงจากเก่าไปใหม่
+    try:
+        summary = await ai_assistant.summarize(messages)
+    except RuntimeError as e:
+        return await interaction.followup.send(f"❌ {e}", ephemeral=True)
+    except Exception as e:
+        log.error(f"/ai สรุปห้อง ล้มเหลว: {e}")
+        return await interaction.followup.send("❌ สรุปไม่สำเร็จ ลองใหม่อีกครั้ง", ephemeral=True)
+    await interaction.followup.send(f"**สรุปห้องนี้ ({len(messages)} ข้อความล่าสุด):**\n{summary[:1800]}")
+
+
+@ai_group.command(name="แนะนำปาร์ตี้", description="ให้ AI ช่วยดูสถานะตี้ปัจจุบันแล้วแนะนำจุดที่ควรปรับ (ไม่แก้ข้อมูลใดๆ)")
+@has_mod_perms()
+async def ai_suggest_party(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    pool = await db.get_pool()
+    grouped = await _fetch_party_assignments_grouped(pool, interaction.guild.id)
+    if not grouped:
+        return await interaction.followup.send("ยังไม่มีการจัดตี้ไว้ ใช้ `/party generate` หรือ `/party upload` ก่อน", ephemeral=True)
+
+    lines = []
+    for (group_name, party_num), members in sorted(grouped.items()):
+        has_priest = any(_is_priest(m["character_class"]) for m in members)
+        roster = ", ".join(f"{m['in_game_name']}({m['character_class'] or '?'})" for m in members)
+        lines.append(f"{_party_label(group_name, party_num)} [{len(members)} คน{'' if has_priest else ' ⚠️ไม่มีพระ'}]: {roster}")
+    party_summary_text = "\n".join(lines)
+
+    try:
+        advice = await ai_assistant.suggest_party(party_summary_text)
+    except RuntimeError as e:
+        return await interaction.followup.send(f"❌ {e}", ephemeral=True)
+    except Exception as e:
+        log.error(f"/ai แนะนำปาร์ตี้ ล้มเหลว: {e}")
+        return await interaction.followup.send("❌ แนะนำไม่สำเร็จ ลองใหม่อีกครั้ง", ephemeral=True)
+    await interaction.followup.send(f"**คำแนะนำจาก AI:**\n{advice[:1800]}", ephemeral=True)
+
+
+tree.add_command(ai_group)
+
+
+# ─────────────────────────────────────────────
 # เปิด/ปิดคำสั่ง (ต่อเซิร์ฟเวอร์)
 # ─────────────────────────────────────────────
 
@@ -2986,6 +3066,10 @@ async def help_cmd(interaction: discord.Interaction):
     embed.add_field(name="/top", value="จัดอันดับคนที่อยู่ห้องเสียงนานที่สุด", inline=False)
     embed.add_field(name="/stats", value="สรุปสถิติเสียงทั้งเซิร์ฟเวอร์", inline=False)
     embed.add_field(name="/counter add | remove | list", value="ตัวนับบนชื่อห้อง ห้องละไม่เกิน 4 ตัว (แอดมิน)", inline=False)
+    embed.add_field(name="/ai ถาม", value="ถามอะไรก็ได้กับ AI บอทจะจำบทสนทนาในห้องนี้ไว้", inline=False)
+    embed.add_field(name="/ai ลืม", value="ล้างบทสนทนาที่บอทจำไว้ในห้องนี้", inline=False)
+    embed.add_field(name="/ai สรุปห้อง", value="ให้ AI สรุปข้อความล่าสุดในห้องนี้", inline=False)
+    embed.add_field(name="/ai แนะนำปาร์ตี้", value="ให้ AI ดูสถานะตี้ปัจจุบันแล้วแนะนำจุดที่ควรปรับ (แอดมิน)", inline=False)
     embed.add_field(name="/setup-introduction", value="โพสต์กระดานแนะนำตัวผู้เล่นในห้องที่เลือก (แอดมิน)", inline=False)
     embed.add_field(name="/setup-jobs", value="ตั้งค่า Role อาชีพที่จะให้เลือกตอนแนะนำตัว (แอดมิน)", inline=False)
     embed.add_field(name="/my-profile", value="ดูข้อมูลแนะนำตัวของตัวเอง", inline=False)

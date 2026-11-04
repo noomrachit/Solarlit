@@ -6,3 +6,4 @@ matplotlib>=3.8.0
 pytesseract>=0.3.10
 Pillow>=10.0.0
 numpy>=1.26
+anthropic>=0.40.0
