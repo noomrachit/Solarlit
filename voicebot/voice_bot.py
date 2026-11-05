@@ -249,6 +249,12 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
     if after_id in tracked:
         await open_session(member.guild.id, after_id, member.id)
 
+    if after.channel is not None:
+        try:
+            await _check_party_seat(member, after.channel)
+        except Exception as e:
+            log.error(f"เช็คที่นั่งตี้พัง: {e}")
+
 
 async def reconcile_open_sessions():
     """
@@ -1684,6 +1690,67 @@ def _party_label(group: str, party_num: int) -> str:
     return f"{group}{party_num:02d}"
 
 
+_TEAM_CHANNEL_RE = re.compile(r'(SUN|MOON|DARK|FLASH)\s*0*([1-9]\d*)', re.IGNORECASE)
+
+
+def _parse_team_channel(channel_name: str):
+    """
+    ดึงทีม+เลขตี้จากชื่อห้องเสียง เช่น "01・🔊・SUN 1" -> ("SUN", 1)
+    ห้องต้องมีคำว่า SUN/MOON/DARK/FLASH ตามด้วยเลขทีม (1-4) อยู่ในชื่อ ไม่งั้นถือว่าไม่ใช่ห้องตี้
+    """
+    m = _TEAM_CHANNEL_RE.search(channel_name or "")
+    if not m:
+        return None
+    group = m.group(1).upper()
+    num = int(m.group(2))
+    if group not in PARTY_GROUPS or not (1 <= num <= PARTIES_PER_GROUP):
+        return None
+    return group, num
+
+
+async def _check_party_seat(member: discord.Member, channel):
+    """เข้าห้องตี้ที่ตั้งชื่อตรงกับทีมในตาราง -> เช็คว่าตรงตามโพยไหม ไม่ตรงแจ้งเตือนห้องที่ตั้งไว้"""
+    parsed = _parse_team_channel(getattr(channel, "name", None))
+    if not parsed:
+        return
+    group, num = parsed
+
+    pool = await db.get_pool()
+    settings = await pool.fetchrow(
+        "SELECT alert_channel FROM party_watch_settings WHERE guild_id = $1", member.guild.id
+    )
+    if not settings:
+        return
+    alert_channel = member.guild.get_channel(settings["alert_channel"])
+    if not alert_channel:
+        return
+
+    expected_rows = await pool.fetch(
+        "SELECT discord_user_id FROM party_assignments WHERE guild_id = $1 AND group_name = $2 AND party_num = $3",
+        member.guild.id, group, num
+    )
+    if member.id in {r["discord_user_id"] for r in expected_rows}:
+        return  # เข้าถูกตี้แล้ว ไม่ต้องแจ้งเตือน
+
+    label = _party_label(group, num)
+    me = await pool.fetchrow(
+        "SELECT group_name, party_num, character_class FROM party_assignments WHERE guild_id = $1 AND discord_user_id = $2",
+        member.guild.id, member.id
+    )
+    if me:
+        correct_label = _party_label(me["group_name"], me["party_num"])
+        msg = f"⚠️ {member.mention} เข้าห้อง **{label}** ผิดตี้ — ตามตารางควรอยู่ **{correct_label}** ({me['character_class']})"
+    else:
+        msg = f"⚠️ {member.mention} เข้าห้อง **{label}** แต่ไม่มีชื่อในตารางปาร์ตี้เลย"
+
+    try:
+        await alert_channel.send(msg)
+    except discord.Forbidden:
+        log.error(f"แจ้งเตือนที่นั่งผิดตี้ไม่สำเร็จ: บอทไม่มีสิทธิ์ส่งข้อความในห้อง {alert_channel.id}")
+    except discord.HTTPException as e:
+        log.error(f"แจ้งเตือนที่นั่งผิดตี้ไม่สำเร็จ: {e}")
+
+
 async def _generate_party_assignments(pool, guild_id: int):
     """
     สร้างโพยปาร์ตี้อัตโนมัติจาก player_profiles (ตัดคนที่ลาไว้) — ใช้เมื่อไม่มีรูปตาราง
@@ -2347,6 +2414,26 @@ async def party_cancel(interaction: discord.Interaction):
         await pool.execute(f"DELETE FROM {table_name} WHERE guild_id = $1", interaction.guild.id)
 
     await interaction.response.send_message("🗑️ ยกเลิกระบบจัดปาร์ตี้ทั้งหมดแล้ว (ล้างโพย + ปิดกระดาน)", ephemeral=True)
+
+
+@party_group.command(name="watch-setup", description="ตั้งห้องแจ้งเตือนเมื่อมีคนเข้าห้องเสียงผิดตี้ (เทียบกับตารางปาร์ตี้)")
+@has_mod_perms()
+@app_commands.describe(channel="ห้องข้อความที่จะส่งการแจ้งเตือน")
+async def party_watch_setup(interaction: discord.Interaction, channel: discord.TextChannel):
+    pool = await db.get_pool()
+    await pool.execute(
+        """
+        INSERT INTO party_watch_settings (guild_id, alert_channel) VALUES ($1, $2)
+        ON CONFLICT (guild_id) DO UPDATE SET alert_channel = $2
+        """,
+        interaction.guild.id, channel.id
+    )
+    await interaction.response.send_message(
+        f"✅ ตั้งห้องแจ้งเตือนที่นั่งผิดตี้เป็น {channel.mention} แล้ว\n"
+        f"ห้องเสียงต้องมีคำว่า SUN/MOON/DARK/FLASH ตามด้วยเลขทีม (1-4) อยู่ในชื่อ เช่น \"SUN 1\", \"FLASH4\"",
+        ephemeral=True
+    )
+
 
 tree.add_command(party_group)
 

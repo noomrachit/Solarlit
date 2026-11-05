@@ -169,6 +169,12 @@ async def init_db():
                 counters TEXT NOT NULL,
                 PRIMARY KEY (guild_id, channel_id)
             );
+
+            -- ห้องแจ้งเตือนเมื่อมีคนเข้าห้องเสียงผิดตี้ (เทียบกับ party_assignments)
+            CREATE TABLE IF NOT EXISTS party_watch_settings (
+                guild_id BIGINT PRIMARY KEY,
+                alert_channel BIGINT NOT NULL
+            );
             """
         )
 
