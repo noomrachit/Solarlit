@@ -11,9 +11,8 @@ a voice-relay bot, a static marketing site) that are not part of the pnpm worksp
 
 ## Commands
 
-There is no root `package.json` committed to this repo (CI and `replit.md` reference root-level
-`pnpm run typecheck` / `pnpm run build`, but those scripts currently only exist by convention — verify a
-root `package.json` exists before relying on them; if missing, run the per-package scripts below instead).
+A root `package.json` exists with `typecheck`/`typecheck:libs`/`build` scripts (added to fix CI's
+Node/pnpm job) — `pnpm run typecheck` / `pnpm run build` from the repo root work as CI expects.
 
 Per-package TypeScript commands (run from repo root with `--filter`, or `cd` into the package):
 
@@ -68,8 +67,8 @@ Same pattern for `voicebot/voice_bot.py`, `voicerelay/relay_bot.py`, `website/se
 - `scripts` — misc `tsx` one-off scripts.
 - `bot/`, `voicebot/`, `voicerelay/`, `website/` — independent Python processes (see below); **not** part
   of the pnpm workspace, no shared code with the TS side.
-- `attached_assets/` — leftover uploads/snapshots from Replit (old zips, pasted snippets, a stale copy
-  of the bot under `attached_assets/moonlit-bot/`); not live code, don't treat it as source of truth.
+- `attached_assets/` — leftover uploads/snapshots from Replit (an unextracted zip of the bot, pasted
+  text snippets, one stray `.py` file); not live code, don't treat it as source of truth.
 - `.agents/memory/` — durable notes from prior agent sessions (BigInt handling, auth flow, venv/Nix
   quirks). Read these before touching the areas they cover; add new ones for non-obvious discoveries.
 
@@ -125,8 +124,7 @@ The registered Discord OAuth redirect URI must exactly match what the server com
   Node `pg` pool). Runs a tiny `aiohttp` health-check server on `$BOT_HEALTH_PORT`.
 - `voicebot/voice_bot.py` — separate Discord bot for voice-activity tracking/analytics (matplotlib
   charts). Has its own `database.py` and Discord bot token; unrelated to `bot/`.
-- `voicerelay/relay_bot.py` (note: `voicerelay/relay bot.py`, with a space, also exists in the tree and
-  is stale/duplicate — the underscore file is the one referenced by tooling) — a listener bot +
+- `voicerelay/relay_bot.py` — a listener bot +
   N speaker bots relaying one voice channel's audio into several others in real time. Needs
   `LISTENER_BOT_TOKEN` and `SPEAKER_BOT_TOKEN_<n>` per concurrent target room; one-way audio only,
   ~0.3–0.8s latency by design (see the module docstring for the full constraint list).
