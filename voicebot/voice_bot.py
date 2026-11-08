@@ -1301,6 +1301,65 @@ async def player_list(interaction: discord.Interaction):
         await interaction.followup.send(embed=embed, ephemeral=True)
 
 
+@tree.command(name="import-roster", description="นำเข้า/อัปเดตข้อมูลแนะนำตัวผู้เล่นทีละหลายคนจากไฟล์ CSV (แอดมิน)")
+@has_mod_perms()
+@app_commands.describe(file="ไฟล์ .csv 3 คอลัมน์: ชื่อในดิส,ชื่อในเกม,อาชีพ (มีหัวตารางหรือไม่มีก็ได้)")
+async def import_roster(interaction: discord.Interaction, file: discord.Attachment):
+    await interaction.response.defer(ephemeral=True)
+    if not file.filename.lower().endswith(".csv"):
+        return await interaction.followup.send("❌ ต้องเป็นไฟล์ .csv เท่านั้น", ephemeral=True)
+
+    raw = await file.read()
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = raw.decode("cp874", errors="ignore")  # เผื่อไฟล์เซฟมาเป็น TIS-620/Windows-874
+
+    rows = [r for r in csv.reader(io.StringIO(text)) if any(c.strip() for c in r)]
+    if rows and rows[0][:1] and rows[0][0].strip().lower() in ("ชื่อในดิส", "discord_name", "ชื่อ"):
+        rows = rows[1:]  # ตัดแถวหัวตารางทิ้งถ้ามี
+
+    members = [m for m in interaction.guild.members if not m.bot]
+    if not members:
+        return await interaction.followup.send("❌ หารายชื่อสมาชิกในเซิร์ฟเวอร์ไม่ได้", ephemeral=True)
+
+    pool = await db.get_pool()
+    matched, unmatched = [], []
+    for r in rows:
+        if len(r) < 3:
+            continue
+        discord_name, in_game_name, character_class = (c.strip() for c in r[:3])
+        if not discord_name:
+            continue
+        best = max(members, key=lambda m: difflib.SequenceMatcher(None, discord_name.lower(), m.display_name.lower()).ratio())
+        score = difflib.SequenceMatcher(None, discord_name.lower(), best.display_name.lower()).ratio()
+        if score >= 0.8:
+            await pool.execute(
+                """
+                INSERT INTO player_profiles (guild_id, discord_user_id, in_game_name, discord_name, character_class)
+                VALUES ($1, $2, $3, $4, $5)
+                ON CONFLICT (guild_id, discord_user_id) DO UPDATE
+                SET in_game_name = $3, discord_name = $4, character_class = $5, updated_at = NOW()
+                """,
+                interaction.guild.id, best.id, in_game_name or best.display_name, discord_name, character_class
+            )
+            matched.append(f"{discord_name} → {best.display_name} ({character_class})")
+        else:
+            unmatched.append(f"{discord_name} ({character_class})")
+
+    try:
+        await refresh_player_board(interaction.guild)
+    except Exception as e:
+        log.error(f"อัปเดตกระดานรายชื่อหลัง import-roster ไม่สำเร็จ: {e}")
+
+    msg = f"✅ อัปเดตข้อมูลแนะนำตัวแล้ว {len(matched)} คน"
+    if unmatched:
+        preview = "\n".join(unmatched[:30])
+        more = f"\n...และอีก {len(unmatched) - 30} คน" if len(unmatched) > 30 else ""
+        msg += f"\n\n⚠️ หาชื่อในดิสไม่เจอ (คล้ายไม่ถึง 80%) {len(unmatched)} คน — เช็คชื่อในดิสให้ตรง หรือเพิ่มเองด้วย `/edit-profile`:\n{preview}{more}"
+    await interaction.followup.send(msg[:1900], ephemeral=True)
+
+
 @tree.command(name="announce", description="ส่งประกาศพร้อมรูปไปห้องที่กำหนด (แอดมิน)")
 @has_mod_perms()
 @app_commands.describe(
