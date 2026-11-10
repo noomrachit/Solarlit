@@ -2435,6 +2435,17 @@ async def party_watch_setup(interaction: discord.Interaction, channel: discord.T
     )
 
 
+@party_group.command(name="watch-off", description="ปิดการแจ้งเตือนที่นั่งผิดตี้")
+@has_mod_perms()
+async def party_watch_off(interaction: discord.Interaction):
+    pool = await db.get_pool()
+    result = await pool.execute("DELETE FROM party_watch_settings WHERE guild_id = $1", interaction.guild.id)
+    if result.endswith(" 0"):
+        await interaction.response.send_message("ยังไม่ได้ตั้งค่าการแจ้งเตือนนี้ไว้อยู่แล้ว", ephemeral=True)
+    else:
+        await interaction.response.send_message("🛑 ปิดการแจ้งเตือนที่นั่งผิดตี้แล้ว", ephemeral=True)
+
+
 tree.add_command(party_group)
 
 
@@ -3176,6 +3187,8 @@ async def help_cmd(interaction: discord.Interaction):
     embed.add_field(name="/party leaveboard", value="โพสต์กระดานลา (ปุ่มลา/ยกเลิกลา) (แอดมิน)", inline=False)
     embed.add_field(name="/party rosterboard", value="โพสต์กระดานตารางปาร์ตี้แบบรูปภาพ (แอดมิน)", inline=False)
     embed.add_field(name="/party cancel", value="ยกเลิกระบบจัดปาร์ตี้ทั้งหมด (แอดมิน)", inline=False)
+    embed.add_field(name="/party watch-setup", value="ตั้งห้องแจ้งเตือนเมื่อมีคนเข้าห้องเสียงผิดตี้ (แอดมิน)", inline=False)
+    embed.add_field(name="/party watch-off", value="ปิดการแจ้งเตือนที่นั่งผิดตี้ (แอดมิน)", inline=False)
     embed.add_field(name="/command-toggle", value="เปิด/ปิดคำสั่งของบอทในเซิร์ฟเวอร์นี้ เลือกได้หลายอันพร้อมกัน (แอดมิน)", inline=False)
     embed.add_field(name="/invite", value="รับลิงก์เชิญบอทพร้อม permission ครบ (รวม Manage Roles)", inline=False)
     embed.add_field(name="/ping", value="ตรวจสอบสถานะบอท", inline=False)
